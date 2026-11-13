@@ -1,0 +1,8 @@
+{
+  "version": 1,
+  "storage": {
+    "recordings": "F:\\MyRecorder\\Recordings",
+    "converted": "F:\\MyRecorder\\Converted",
+    "temp": "F:\\MyRecorder\\Temp"
+  }
+}
