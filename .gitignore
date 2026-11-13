@@ -1,0 +1,37 @@
+# Python environments and bytecode
+.venv/
+venv/
+env/
+__pycache__/
+*.py[cod]
+# Packaging output
+build/
+dist/
+*.spec
+bin/*.exe
+# Personal configuration and credentials
+settings.json
+.settings-*.tmp
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+# Recordings, recovery files, media and archives
+.myrecorder-*/
+session-*/
+[Rr]ecordings/
+[Cc]onverted/
+[Tt]emp/
+*.mp4
+*.mkv
+*.wav
+*.avi
+*.mov
+*.webm
+*.mp3
+*.m4a
+*.aac
+*.partial
+*.log
+*.zip
