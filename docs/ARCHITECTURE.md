@@ -8,6 +8,9 @@ myrecorder/
   titles.py      Win32 창 제목 / 수동 Tesseract OCR (선택 설치)
   display.py     Qt 논리 영역 → 모니터별 Win32 물리 좌표 / 메모리 OCR 이미지
   maintenance.py 검증된 완료 세션의 명시적 정리
+  regions.py     모니터 내 이동·8방향 크기 조절의 순수 좌표 계산
+  window_capture.py 자체 최상위 창의 WDA_EXCLUDEFROMCAPTURE 설정·읽기 확인
+  overlay.py     상시 테두리·상태색·픽셀 라벨·비어 있는 가운데·입력 잠금
   gui.py         PySide6 GUI, 영역 선택, 작업 스레드
   recorder.py    Windows gdigrab 구간 녹화, 세션 메타데이터
   audio.py       PyAudioWPatch WASAPI loopback / 기본 입력 PCM
@@ -126,3 +129,12 @@ OCR subprocess는 작업 스레드에서 실행하고 언어·실행 시간·오
 경로/크기/probe를 확인하고 삭제 직전에 재검사. 세션 내부 링크/정션, 세션 안 최종 MP4,
 불완전 구간이나 과거 버전 세션은 거부. raw 원본은 기본적으로 보관하며 실패 시 자동 삭제하지 않음.
 상세 설명과 검증 구분은 WINDOWS_V0.4.md, VALIDATION.md 참고.
+
+## V0.4.1 영역 오버레이
+
+recorder/audio/media/display/settings와 캡처/오디오 인자는 V0.4 그대로 유지.
+GUI 선택 영역을 별도 RegionOverlay로 표시하고 idle일 때만 편집 신호를 GUI에 반영.
+녹화 전 입력 통과 플래그와 제외 속성을 준비하고 핸들이 바뀌면 다시 확인.
+실제 캡처 중(시작/재개/저장 종료 경계 포함) 제외 미확인이면 표시하지 않음.
+OS API 성공은 실제 gdigrab 제외 시험을 대신하지 않음. 네이티브 Windows 검증 대기.
+자세한 소스 판정과 사용법은 REGION_OVERLAY_V0.4.1.md 참고.
