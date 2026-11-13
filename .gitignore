@@ -35,3 +35,6 @@ session-*/
 *.partial
 *.log
 *.zip
+# Local audio diagnostics
+*.jsonl
+audio-test-*/

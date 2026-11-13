@@ -48,6 +48,8 @@ class MediaIntegration(unittest.TestCase):
                     run([binary('ffmpeg'), '-y', '-v', 'error', '-f', 'lavfi', '-i', f'sine=frequency={hz}:sample_rate=48000:duration=1.5', str(session/filename)])
                     tracks.append({'file':filename,'offset':0.05})
                 segments.append({'index':i, 'tracks':tracks})
+            # A failed start must not poison recovery of valid earlier segments.
+            segments.append({'index':99,'tracks':[],'usable':False})
             (session/'session.json').write_text(json.dumps({'segments':segments}))
             original=assemble(session,root,'강의 테스트')
             result=probe(original)

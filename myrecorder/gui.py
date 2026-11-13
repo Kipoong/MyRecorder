@@ -4,11 +4,13 @@ from pathlib import Path
 import sys
 import time
 import traceback
+import uuid
 from PySide6.QtCore import Qt, QRect, QThread, Signal, QTimer
 from PySide6.QtGui import QColor, QPainter, QPen, QShortcut, QKeySequence
 from PySide6.QtWidgets import (QApplication, QWidget, QMainWindow, QPushButton, QLabel,
     QLineEdit, QComboBox, QCheckBox, QFileDialog, QMessageBox, QGridLayout, QDialog, QDialogButtonBox)
 from .recorder import Options, Recorder
+from .audio import Diagnostics, device_choices
 from .settings import SettingsStore, StoragePaths, StorageError, prepare_storage, LABELS
 
 
@@ -121,7 +123,7 @@ class StorageDialog(QDialog):
 class Window(QMainWindow):
     def __init__(self, store=None, check_startup=True):
         super().__init__()
-        self.setWindowTitle('MyRecorder — Windows 11 MVP')
+        self.setWindowTitle('MyRecorder V0.3 — Windows 11')
         self.settings = store or SettingsStore()
         self.paths = self.settings.load()
         self.recorder = None
@@ -149,8 +151,14 @@ class Window(QMainWindow):
         self.pick.clicked.connect(self.select_region)
         self.region_label = QLabel()
         self.region_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
-        self.system = QCheckBox('시스템 소리 (기본 출력 장치)')
+        self.system = QCheckBox('시스템 소리')
         self.system.setChecked(True)
+        self.output_device = QComboBox()
+        self.output_device.addItem('Windows 기본 WASAPI 출력 장치 (자동)', None)
+        self.refresh_devices_button = QPushButton('오디오 장치 새로고침')
+        self.refresh_devices_button.clicked.connect(self.refresh_audio_devices)
+        self.audio_hint = QLabel('기본 출력은 자동 탐지됩니다. 직접 선택하려면 장치 목록을 새로고침하세요.')
+        self.audio_hint.setWordWrap(True)
         self.mic = QCheckBox('마이크 (기본 입력 장치)')
         self.cursor = QCheckBox('마우스 커서 포함')
         self.cursor.setChecked(True)
@@ -174,12 +182,13 @@ class Window(QMainWindow):
         self.status.setWordWrap(True)
         rows = [(QLabel('강의 제목'), self.title), (QLabel('저장 경로'), self.folder, self.browse),
                 (self.screen, self.full, self.pick), (self.region_label,),
-                (self.system, self.mic, self.cursor), (QLabel('FPS'), self.fps, self.quality),
+                (self.system, self.mic, self.cursor),
+                (QLabel('시스템 출력 장치'), self.output_device, self.refresh_devices_button), (self.audio_hint,), (QLabel('FPS'), self.fps, self.quality),
                 (self.start_button, self.pause_button, self.stop_button), (self.clock, self.open_button), (self.status,)]
         for r, widgets in enumerate(rows):
             for c, widget in enumerate(widgets):
                 grid.addWidget(widget, r, c, 1, 3 if len(widgets)==1 else 1)
-        self.controls = [self.title, self.folder, self.browse, self.screen, self.full, self.pick, self.system, self.mic, self.cursor, self.fps, self.quality]
+        self.controls = [self.title, self.folder, self.browse, self.screen, self.full, self.pick, self.system, self.mic, self.cursor, self.fps, self.quality, self.output_device, self.refresh_devices_button]
         for key, fn in [('Ctrl+Shift+R', self.start), ('Ctrl+Shift+P', self.pause), ('Ctrl+Shift+S', self.stop)]:
             shortcut = QShortcut(QKeySequence(key), self)
             shortcut.activated.connect(fn)
@@ -188,9 +197,42 @@ class Window(QMainWindow):
         self.timer.start(250)
         self.fullscreen()
         self.refresh()
-        self.resize(800, 380)
+        self.resize(900, 480)
         if check_startup:
-            QTimer.singleShot(0, self.check_storage)
+            QTimer.singleShot(0, self.startup_checks)
+
+    def startup_checks(self):
+        if self.check_storage() and os.name == 'nt':
+            self.refresh_audio_devices()
+
+    def refresh_audio_devices(self):
+        if self.state != 'idle' or self.job or not self.check_storage():
+            return
+        selected = self.output_device.currentData()
+        def work():
+            log = Diagnostics(Path(self.paths.temp)/('audio-devices-'+uuid.uuid4().hex+'.jsonl'))
+            try:
+                return device_choices(log), str(log.path)
+            except Exception as exc:
+                log.write('discovery_failed', error=str(exc))
+                raise RuntimeError(f'{exc}\n장치 진단 로그: {log.path}') from exc
+        def finished(result):
+            choices, log_path = result
+            self.output_device.clear()
+            self.output_device.addItem('Windows 기본 WASAPI 출력 장치 (자동)', None)
+            for device in choices:
+                detail = f"{device.get('channels', '?')}ch / {device.get('rate', '?')}Hz → Loopback ID {device.get('loopback_index', '?')}"
+                label = f"{device['name']} [출력 ID {device['index']}] — {detail}"
+                if device['default']: label += ' (기본값)'
+                if not device['available']: label += ' (Loopback 사용 불가)'
+                self.output_device.addItem(label, device)
+                if selected and selected.get('index') == device['index'] and selected.get('name') == device['name']:
+                    self.output_device.setCurrentIndex(self.output_device.count()-1)
+            default = next((d['name'] for d in choices if d['default']), '탐지하지 못함')
+            self.audio_hint.setText(f'현재 WASAPI 기본 출력: {default}\n장치 진단 로그: {log_path}')
+            self.status.setText('장치 조회 완료. 실제 소리를 내는 출력 장치를 선택하세요. 무음 영상은 시스템 소리·마이크를 모두 해제하세요.')
+        self.status.setText('Windows WASAPI 출력·Loopback 장치 조회 중…')
+        self.submit(work, finished)
 
     def current_screen(self):
         return QApplication.screens()[self.screen.currentIndex()]
@@ -231,7 +273,7 @@ class Window(QMainWindow):
         self.pause_button.setEnabled(self.state in ('recording', 'paused') and not busy)
         self.pause_button.setText('재개' if self.state == 'paused' else '일시정지')
         self.stop_button.setEnabled(self.state in ('recording', 'paused') and not busy)
-    def submit(self, fn, success):
+    def submit(self, fn, success, reset_start=False):
         if self.job is not None:
             return
         self.job = Job(fn)
@@ -240,10 +282,13 @@ class Window(QMainWindow):
             job.wait()
             self.job = None
             if error:
-                if self.recorder and self.recorder.process is None:
-                    self.state = 'paused'
                 self.border.hide()
-                recovery = str(self.recorder.folder) if self.recorder else self.folder.text()
+                recovery = str(self.recorder.folder) if self.recorder else self.paths.temp
+                if reset_start and (self.recorder is None or self.recorder.process is None):
+                    self.state = 'idle'
+                    self.recorder = None
+                elif self.recorder and self.recorder.process is None:
+                    self.state = 'paused'
                 self.status.setText('오류 — 임시 파일 보존됨: ' + recovery)
                 QMessageBox.critical(self, '오류 / 복구 경로', error[-4500:] + '\n\n임시 파일: ' + recovery)
             else:
@@ -265,16 +310,17 @@ class Window(QMainWindow):
             rect=(r.x(), r.y(), r.width(), r.height()), temp_folder=Path(self.paths.temp),
             converted_folder=Path(self.paths.converted), fps=int(self.fps.currentText()),
             crf=[18, 23, 28][self.quality.currentIndex()], cursor=self.cursor.isChecked(),
-            system=self.system.isChecked(), mic=self.mic.isChecked())
+            system=self.system.isChecked(), mic=self.mic.isChecked(),
+            system_device=self.output_device.currentData())
         def work():
             self.recorder = Recorder(opts)
             self.recorder.start()
-        self.status.setText('캡처 장치 준비 중…')
-        self.submit(work, self.started)
+        self.status.setText('장치 준비 중… 선택한 출력 장치로 소리를 재생하세요. 첫 패킷 지연은 즉시 실패 처리하지 않습니다.')
+        self.submit(work, self.started, reset_start=True)
     def started(self, _):
         self.state = 'recording'
         self.border.mark(self.region)
-        self.status.setText('녹화 중 — 기본 오디오 장치를 녹화 도중 변경하지 마세요.')
+        self.status.setText('녹화 중 — ' + self.recorder.audio_status())
     def pause(self):
         if self.job or self.state not in ('recording', 'paused'):
             return
@@ -295,7 +341,11 @@ class Window(QMainWindow):
             self.state = 'idle'
             self.border.hide()
             self.status.setText('저장 완료: ' + str(path) + '\n복구용 임시 폴더는 확인 후 직접 삭제하세요.')
+            warnings = list(dict.fromkeys(self.recorder.manifest['warnings']))
+            log = self.recorder.diagnostics.path
             self.recorder = None
+            if warnings:
+                QMessageBox.warning(self, '저장 완료 / 오디오 확인 필요', '\n'.join(warnings)[-3000:] + f'\n로그: {log}\n영상은 저장되었습니다. 오디오를 직접 확인하세요.')
         self.submit(self.recorder.finish, finished)
     def tick(self):
         if not self.recorder:
@@ -310,6 +360,8 @@ class Window(QMainWindow):
             if error:
                 self.status.setText(error)
                 self.pause()
+            else:
+                self.status.setText('녹화 중 — ' + self.recorder.audio_status())
     def open_folder(self):
         path = self.last.parent if self.last else Path(self.folder.text())
         try:

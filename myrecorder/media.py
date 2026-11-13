@@ -114,6 +114,8 @@ def assemble(folder: Path, destination: Path, title: str) -> Path:
     manifest = json.loads((folder / 'session.json').read_text(encoding='utf-8'))
     ready = []
     for segment in manifest['segments']:
+        if segment.get('usable') is False:
+            continue
         ready.append(mux_segment(folder, segment['index'], segment['tracks']))
     if not ready:
         raise RuntimeError('저장할 녹화 구간이 없습니다.')
