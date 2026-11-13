@@ -8,11 +8,13 @@ import uuid
 from PySide6.QtCore import Qt, QRect, QThread, Signal, QTimer
 from PySide6.QtGui import QColor, QPainter, QPen, QShortcut, QKeySequence
 from PySide6.QtWidgets import (QApplication, QWidget, QMainWindow, QPushButton, QLabel,
-    QLineEdit, QComboBox, QCheckBox, QFileDialog, QMessageBox, QGridLayout, QDialog, QDialogButtonBox, QScrollArea)
+    QLineEdit, QComboBox, QCheckBox, QFileDialog, QMessageBox, QGridLayout, QDialog, QDialogButtonBox, QScrollArea, QDoubleSpinBox)
 from .recorder import Options, Recorder
 from .media import binary
 from .modes import RecordingPolicy, MODES
 from .preferences import PreferencesStore
+from .browser_bridge import Bridge
+from .auto_link import AutoLink
 from .desktop import layout as desktop_layout, validate_rect
 from .desktop_ui import DesktopDialog, DesktopOverlay
 from .audio import Diagnostics, device_choices
@@ -128,7 +130,7 @@ class StorageDialog(QDialog):
 class Window(QMainWindow):
     def __init__(self, store=None, check_startup=True):
         super().__init__()
-        self.setWindowTitle('MyRecorder V0.5.0 — Windows 11')
+        self.setWindowTitle('MyRecorder V0.6.0 — Windows 11')
         self.settings = store or SettingsStore()
         self.paths = self.settings.load()
         self.preferences=PreferencesStore(self.settings.root)
@@ -136,6 +138,10 @@ class Window(QMainWindow):
         self.desktop_mode=False
         self.desktop_entries=[]
         self.desktop_signature=None
+        self.browser_bridge=None
+        self.auto_link=None
+        self.auto_log=None
+        self._browser_keys=[]
         self.recorder = None
         self.state = 'idle'
         self.job = None
@@ -180,6 +186,16 @@ class Window(QMainWindow):
         self.recording_type.setCurrentIndex(self.recording_type.findData(self.policy.mode))
         self.recording_type.currentIndexChanged.connect(self.change_recording_type)
         self.mode_hint=QLabel(self.policy.instructions);self.mode_hint.setWordWrap(True)
+        self.extension_id=QLineEdit();self.extension_id.setPlaceholderText('확장 프로그램 ID (a~p 32자)')
+        self.bridge_button=QPushButton('로컬 연결 시작');self.bridge_button.clicked.connect(self.open_browser_bridge)
+        self.pairing_info=QLineEdit();self.pairing_info.setReadOnly(True);self.pairing_info.setPlaceholderText('연결 정보를 확장 팝업에 붙여넣으세요. 토큰은 공유하지 마세요.')
+        self.lecture_tab=QComboBox();self.lecture_tab.addItem('연결된 HTML5 강의 탭 대기',None)
+        self.auto_detect=QCheckBox('강의 재생 자동 감지');self.auto_detect.toggled.connect(self.toggle_auto_detect)
+        self.auto_ended=QCheckBox('강의 종료 시 MP4 자동 저장')
+        self.auto_lead=QDoubleSpinBox();self.auto_lead.setRange(0,2);self.auto_lead.setSingleStep(.25);self.auto_lead.setValue(.5);self.auto_lead.setSuffix('초 선행')
+        self.auto_tail=QDoubleSpinBox();self.auto_tail.setRange(0,3);self.auto_tail.setSingleStep(.25);self.auto_tail.setValue(1);self.auto_tail.setSuffix('초 정지 여유')
+        self.auto_status=QLabel('자동 연동 OFF — 지원되는 HTML5 video만 연결합니다.');self.auto_status.setWordWrap(True)
+        self.browser_timer=QTimer(self);self.browser_timer.timeout.connect(self.browser_tick);self.browser_timer.start(50)
         self.title = QLineEdit(self.default_title)
         self.title.textEdited.connect(lambda text: setattr(self, 'title_source', 'manual'))
         self.title_button = QPushButton('제목 자동 인식')
@@ -258,7 +274,9 @@ class Window(QMainWindow):
         self.clock.setStyleSheet('font-size: 28px; font-weight: bold;')
         self.status = QLabel('대기 — 제목과 녹화 영역을 확인하세요.')
         self.status.setWordWrap(True)
-        rows = [(QLabel('녹화 유형'),self.recording_type), (self.mode_hint,), (QLabel('강의 제목'), self.title, self.title_button),
+        rows = [(QLabel('녹화 유형'),self.recording_type), (self.mode_hint,),
+                (self.extension_id,self.bridge_button),(self.pairing_info,),
+                (self.auto_detect,self.lecture_tab,self.auto_ended),(self.auto_lead,self.auto_tail),(self.auto_status,), (QLabel('강의 제목'), self.title, self.title_button),
                 (self.title_mode, self.lecture_window, self.window_refresh),
                 (self.ocr_pick, self.ocr_language, self.ocr_engine), (self.title_hint,), (QLabel('저장 경로'), self.folder, self.browse),
                 (self.screen, self.full, self.pick), (self.desktop_pick,self.desktop_full), (self.region_label, self.display_diagnose),
@@ -421,6 +439,76 @@ class Window(QMainWindow):
         self.picker.cancelled.connect(cancelled)
         self.picker.show()
 
+    def open_browser_bridge(self):
+        if self.browser_bridge or self.state!='idle' or self.job:return
+        try:
+            self.browser_bridge=Bridge(self.extension_id.text().strip());self.browser_bridge.start()
+            import json
+            self.pairing_info.setText(json.dumps(self.browser_bridge.pairing))
+            self.extension_id.setEnabled(False);self.bridge_button.setEnabled(False)
+            self.auto_status.setText('확장 팝업에 연결 정보를 입력하고 강의 탭을 연결하세요.')
+        except Exception as exc:
+            if self.browser_bridge:self.browser_bridge.close()
+            self.browser_bridge=None;QMessageBox.warning(self,'브라우저 연결',str(exc))
+
+    def auto_event(self,event,**fields):
+        if self.auto_log:self.auto_log.write(event,**fields)
+
+    def toggle_auto_detect(self,enabled):
+        if not enabled:
+            if self.auto_link:self.auto_link.disable()
+            return
+        try:
+            if not self.browser_bridge or self.state!='idle' or self.job:raise ValueError('대기 상태에서 로컬 연결과 강의 탭을 먼저 선택하세요.')
+            if not self.start_button.isEnabled():raise ValueError('유효한 녹화 영역과 FFmpeg 준비 상태를 먼저 확인하세요.')
+            if not self.check_storage():raise ValueError('저장 경로를 준비하지 못했습니다.')
+            self.auto_log=Diagnostics(Path(self.paths.temp)/('auto-link-'+uuid.uuid4().hex+'.jsonl'))
+            self.auto_link=AutoLink(self.browser_bridge,self.auto_event)
+            self.auto_link.lead=self.auto_lead.value();self.auto_link.tail=self.auto_tail.value()
+            self.auto_link.end_stops=self.auto_ended.isChecked()
+            self.auto_link.arm(self.lecture_tab.currentData(),self.policy.mode)
+        except Exception as exc:
+            self.auto_detect.blockSignals(True);self.auto_detect.setChecked(False);self.auto_detect.blockSignals(False)
+            QMessageBox.warning(self,'자동 연동 준비',str(exc))
+
+    def browser_tick(self):
+        armed=bool(self.auto_link and self.auto_link.enabled)
+        self.auto_detect.setEnabled(self.policy.mode=='lecture' and (armed or (self.state=='idle' and not self.job)))
+        for control in (self.lecture_tab,self.auto_lead,self.auto_tail,self.auto_ended):control.setEnabled(not armed and self.state=='idle' and not self.job)
+        if not self.browser_bridge:return
+        sources=sorted(self.browser_bridge.snapshot(),key=lambda item:item['key'])
+        keys=[s['key'] for s in sources]
+        if not armed and keys!=self._browser_keys:
+            selected=self.lecture_tab.currentData();self.lecture_tab.clear()
+            for source in sources:
+                self.lecture_tab.addItem(source['title']+' | '+source['video_label']+' | '+source['origin'],source['key'])
+            index=self.lecture_tab.findData(selected)
+            if index>=0:self.lecture_tab.setCurrentIndex(index)
+            self._browser_keys=keys
+        for i in range(self.lecture_tab.count()):
+            source=next((item for item in sources if item['key']==self.lecture_tab.itemData(i)),None)
+            if source:
+                freshness='연결 지연/끊김' if time.monotonic()-source['seen']>4 else ('감지 가능' if source['supported'] else '감지 불가')
+                self.lecture_tab.setItemText(i,source['title']+' | '+source['video_label']+' | '+source['origin']+' | '+freshness)
+        if not self.auto_link:
+            self.browser_bridge.drain()
+            if sources:self.auto_status.setText('탭 감지됨 — 정확한 video를 선택하고 자동 감지를 켜세요.')
+            return
+        busy=self.job is not None or self.capture_pending or self.picker_pending or self._recording_transition
+        action=self.auto_link.tick(self.state,busy,self.policy.mode)
+        if action:
+            if action=='start':self.start(automatic=True)
+            elif action in ('pause','resume'):self.pause(automatic=True)
+            elif action=='stop':self.stop(automatic=True)
+            if self.job is None:self.auto_link.failed('캡처 전환을 시작하지 못했습니다.')
+        if not self.auto_link.enabled and self.auto_detect.isChecked():
+            self.auto_detect.blockSignals(True);self.auto_detect.setChecked(False);self.auto_detect.blockSignals(False)
+        source=next((s for s in sources if s['key']==self.auto_link.selected),None)
+        state={'playing':'재생 중','paused':'일시정지','buffering':'버퍼링 (녹화 유지)','ended':'강의 종료','unsupported':'감지 불가'}.get(source['state'] if source else None,'감지 불가')
+        if source and time.monotonic()-source['seen']>8:state='감지 불가'
+        log=f' | 로그: {self.auto_log.path}' if self.auto_log else ''
+        self.auto_status.setText((source['title']+' | ' if source else '')+state+' | '+self.auto_link.message+log)
+
     def change_recording_type(self):
         requested=self.recording_type.currentData()
         if self.state!='idle' or self.job or self._recording_transition:
@@ -433,6 +521,7 @@ class Window(QMainWindow):
             QMessageBox.warning(self,'녹화 유형 설정',str(exc))
             self.recording_type.blockSignals(True);self.recording_type.setCurrentIndex(self.recording_type.findData(self.policy.mode));self.recording_type.blockSignals(False);return
         self.policy=policy;self.mode_hint.setText(policy.instructions)
+        if policy.mode!='lecture' and self.auto_link:self.auto_link.disable('일반 영상 모드 — 자동 연동 적용 안 함')
 
     def active_border(self):return self.desktop_border if self.desktop_mode else self.border
 
@@ -673,6 +762,7 @@ class Window(QMainWindow):
             elif error:
                 was_saving=self.state=='saving'
                 self._recording_transition=False
+                if self.auto_link and self.auto_link.enabled:self.auto_link.failed('녹화 엔진 오류; 원본과 로그를 확인하세요.')
                 recovery = str(self.recorder.folder) if self.recorder else self.paths.temp
                 if reset_start and (self.recorder is None or (self.recorder.process is None and not getattr(self.recorder,'audio',[]))):
                     self.state = 'idle'
@@ -690,10 +780,11 @@ class Window(QMainWindow):
         self.job.done.connect(done)
         self.job.start()
         self.refresh()
-    def start(self):
+    def start(self, automatic=False):
         if not self.policy.permits('start',self.state) or self.job or self.capture_pending or self.picker_pending:
             return
         if self.recorder is not None:return
+        if self.auto_link and not automatic:self.auto_link.manual('start')
         if self.engine_error:
             QMessageBox.warning(self,'녹화 엔진 준비',self.engine_error);return
         if not self.check_storage():
@@ -725,11 +816,13 @@ class Window(QMainWindow):
     def started(self, _):
         self._recording_transition=False
         self.state = 'recording'
+        self.auto_event('capture_started',capture_mono=self.recorder.started,gui_ready_mono=time.monotonic(),audio_status=self.recorder.audio_status())
         self.sync_overlay()
         self.status.setText('녹화 중 — ' + self.recorder.audio_status())
-    def pause(self):
+    def pause(self, automatic=False):
         if self.job or not self.policy.permits('resume' if self.state=='paused' else 'pause',self.state):
             return
+        if self.auto_link and not automatic:self.auto_link.manual('resume' if self.state=='paused' else 'pause')
         if self.state == 'paused':
             self._recording_transition=True
             self.sync_overlay()
@@ -739,12 +832,14 @@ class Window(QMainWindow):
         else:
             def finished(_):
                 self.state = 'paused'
+                self.auto_event('capture_paused',capture_stop_mono=getattr(self.recorder,'stop_requested_at',None))
                 self.sync_overlay()
                 self.status.setText('일시정지 — 구간 파일 보존됨')
             self.submit(self.recorder.pause, finished)
-    def stop(self):
+    def stop(self, automatic=False):
         if self.job or not self.policy.permits('stop',self.state):
             return
+        if self.auto_link and not automatic:self.auto_link.manual('stop')
         self.state='saving'
         self.sync_overlay()
         self.status.setText('MP4 저장 중… 창을 닫지 마세요.')
@@ -814,6 +909,9 @@ class Window(QMainWindow):
         if self.picker is not None: self.picker.close()
         self.border.close()
         self.desktop_border.close()
+        self.browser_timer.stop()
+        if self.auto_link:self.auto_link.disable('앱 종료')
+        if self.browser_bridge:self.browser_bridge.close()
         event.accept()
 
 

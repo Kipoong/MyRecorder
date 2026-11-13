@@ -1,0 +1,12 @@
+{
+  "manifest_version": 3,
+  "name": "MyRecorder 강의 연동",
+  "version": "0.6.0",
+  "description": "선택한 HTML5 강의 플레이어를 로컬 MyRecorder와 연동합니다.",
+  "permissions": ["activeTab", "scripting", "storage"],
+  "host_permissions": ["http://127.0.0.1/*"],
+  "optional_host_permissions": ["http://*/*", "https://*/*"],
+  "background": {"service_worker": "background.js"},
+  "action": {"default_popup": "popup.html"},
+  "minimum_chrome_version": "111"
+}

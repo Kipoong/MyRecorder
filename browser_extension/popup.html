@@ -1,0 +1,8 @@
+<!doctype html><html lang="ko"><meta charset="utf-8"><title>MyRecorder 연동</title>
+<style>body{font:14px sans-serif;width:350px;padding:12px}textarea{width:100%;height:65px}button{margin-top:10px;padding:8px}p{overflow-wrap:anywhere}</style>
+<h3>MyRecorder 강의 연동</h3><p>확장 ID: <b id="id"></b></p>
+<p>앱에 위 ID를 입력해 연결을 시작한 뒤, 앱의 연결 정보를 아래에 붙여넣으세요.</p>
+<textarea id="pairing" placeholder='{"port": ..., "token": "..."}'></textarea>
+<button id="connect">현재 강의 탭 연결</button><button id="disconnect">이 브라우저 연동 해제</button>
+<p id="status">HTML5 video가 있는 최상위 문서만 지원합니다. 보호된 콘텐츠와 iframe 플레이어는 미지원입니다.</p>
+<script src="popup.js"></script></html>

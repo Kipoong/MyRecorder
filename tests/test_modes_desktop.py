@@ -23,7 +23,7 @@ class ModesTests(unittest.TestCase):
             self.assertTrue(policy.permits('pause','recording'))
             self.assertTrue(policy.permits('resume','paused'))
             self.assertFalse(policy.permits('start','saving'))
-            self.assertFalse(policy.automatic_detection_supported)
+            self.assertEqual(policy.automatic_detection_supported,mode=='lecture')
     def test_playback_stillness_silence_never_pause_automatically(self):
         for mode in ['lecture','general']:
             for event in ['source_paused','source_playing','silent','unchanged_frame','unknown_player']:

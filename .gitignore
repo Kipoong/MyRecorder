@@ -47,3 +47,8 @@ bin/tesseract/
 preferences.json
 .preferences-*.tmp
 *-pts.json
+# Local browser pairing/debug artifacts
+browser-test-*/
+player-demo-*/
+playwright-report/
+test-results/

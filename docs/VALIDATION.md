@@ -53,3 +53,15 @@ Linux unittest 127개와 GUI/overlay/display/continuous/modes_desktop/OCR smoke 
 합성 6구간(5회 정지 모델) MP4 결합, PTS/DTS 및 경계 시험음을 검사했습니다.
 Windows 실제 모드 사용/다중 화면 캡처/혼합 DPI/싱크/영상 제외/복구/EXE는 미검증입니다.
 [시험 범위와 Windows 절차](MODES_DESKTOP_V0.5.md).
+
+## V0.6.0 개발 직전 사용자 실기 보고
+
+Windows 11 모니터 1에서 화면 녹화, 시스템 오디오, MP4 저장과 실제 영상·음성 싱크 정상 확인.
+사용자가 명시한 범위만 기록하며 다른 모니터/자동 연동까지 통과로 확대하지 않습니다.
+
+## V0.6.0
+
+Linux unittest 143개 및 기존/신규 Qt smoke 통과. 실제 Chromium 압축해제 확장과 HTML5/로컬
+HTTP에서 5회 ready 게이트/정지·다른 탭·버퍼링·관찰 우회·끊김 검사를 수행했습니다.
+Qt/브라우저 녹화 엔진은 모의이며 Windows 자동 캡처·오디오·싱크 통과가 아닙니다.
+[시험 범위·한계와 Windows 절차](AUTO_LINK_V0.6.md).

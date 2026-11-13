@@ -155,3 +155,11 @@ GUI는 선택한 QScreen 객체와 선택 시 이름/좌표/DPR을 유지하고 
 `desktop_ui.py`는 물리 배치도 선택과 화면별 논리 테두리 투영을 담당합니다.
 `timestamps.py`는 저장 단계의 패킷 PTS/DTS 검사이며 캡처 시간 기준을 변경하지 않습니다.
 구간 결합은 영상 재생 길이를 명시하여 오디오 패딩 길이 누적을 피합니다.
+
+## V0.6.0
+
+`browser_extension`은 사용자 선택 사이트의 최상위 video 이벤트와 지원 JS play의 ready 게이트를 제공합니다.
+Background만 실행별 토큰을 갖고 인증된 loopback HTTP를 호출하며 페이지 스크립트에는 토큰을 넘기지 않습니다.
+`browser_bridge.py`의 HTTP 스레드는 제한된 큐만 갱신합니다. `auto_link.py`는 독립 정책으로
+선택 소스·수동 우선권·선행/여유·연결 끊김을 판단하고 GUI 스레드가 기존 작업을 호출합니다.
+`player_demo.py`는 설정 Temp에 합성 시험 파일을 생성합니다. 녹화 엔진은 변경하지 않습니다.
