@@ -23,3 +23,12 @@ def edit_region(original, dx, dy, mode, bounds, minimum=MIN_SIZE):
     if 'n' in mode: top=max(by,min(y+dy,bottom-mh))
     if 's' in mode: bottom=min(by+bh,max(y+h+dy,top+mh))
     return left,top,right-left,bottom-top
+
+
+def move_to_monitor(original, dx, dy, bounds):
+    """Move into exactly one destination; fit to its DIP size, never span screens."""
+    x,y,w,h=original;bx,by,bw,bh=bounds
+    if any(not math.isfinite(v) for v in (*original,dx,dy,*bounds)) or min(w,h,bw,bh)<=0:
+        raise ValueError('유효하지 않은 모니터 이동 좌표입니다.')
+    w,h=min(w,bw),min(h,bh)
+    return round(max(bx,min(x+dx,bx+bw-w))),round(max(by,min(y+dy,by+bh-h))),round(w),round(h)

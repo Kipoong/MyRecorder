@@ -5,12 +5,13 @@ from PySide6.QtWidgets import QWidget
 from .regions import edit_region
 from .window_capture import ExclusionStatus, exclude_overlay
 
-COLORS={'idle':'#25b65a','recording':'#ed3f3f','paused':'#f39b25'}
-LABELS={'idle':'대기','recording':'녹화 중','paused':'일시정지 / 저장'}
+COLORS={'idle':'#25b65a','recording':'#ed3f3f','paused':'#f39b25','saving':'#f39b25','save_failed':'#f39b25'}
+LABELS={'idle':'대기','recording':'녹화 중','paused':'일시정지','saving':'저장 중','save_failed':'저장 실패'}
 
 
 class RegionOverlay(QWidget):
     regionChanged=Signal(object)
+    moveRequested=Signal(object,object,int,int)
 
     def __init__(self, protect=exclude_overlay):
         super().__init__()
@@ -137,6 +138,9 @@ class RegionOverlay(QWidget):
         if self._drag and self.editable:
             anchor,original,mode=self._drag;delta=point-anchor
             def values(rect):return rect.x(),rect.y(),rect.width(),rect.height()
+            if mode=='move':
+                self.moveRequested.emit(point,original,delta.x(),delta.y())
+                return
             result=edit_region(values(original),delta.x(),delta.y(),mode,values(self.bounds))
             self.regionChanged.emit(QRect(*result))
         elif self.editable:

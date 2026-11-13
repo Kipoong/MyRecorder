@@ -39,3 +39,10 @@ Qt offscreen의 마스크·마우스 캡처·창 올리기 미지원 경고가 �
 
 V0.4.2 추가 실행: `PYTHONPATH=. QT_QPA_PLATFORM=offscreen python tests/display_smoke.py`와
 기존 GUI/overlay/OCR smoke. 새 검사와 실기표: [DISPLAY_V0.4.2.md](DISPLAY_V0.4.2.md).
+
+## V0.4.3
+
+Linux 자동 테스트 113개 통과, 기존 GUI/overlay/display/OCR 및 신규 continuous smoke 통과.
+합성 미디어 세 번 저장/디코딩과 이전 파일 해시 보존을 확인했습니다.
+실제 Windows 연속 녹화/듀얼 모니터 드래그/드라이버 종료/영상 제외/싱크는 미검증입니다.
+[검증 범위 및 재검증표](CONTINUOUS_V0.4.3.md).

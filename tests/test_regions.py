@@ -32,4 +32,20 @@ class RegionEditTests(unittest.TestCase):
         with self.assertRaises(ValueError):edit_region((900,0,200,100),0,0,'move',self.bounds)
 
 
+
+
+class MonitorTransferTests(unittest.TestCase):
+    def test_left_to_right_and_back(self):
+        from myrecorder.regions import move_to_monitor
+        self.assertEqual(move_to_monitor((-1800,100,811,513),2000,20,(0,0,1920,1080)),(200,120,811,513))
+        self.assertEqual(move_to_monitor((200,100,811,513),-2000,0,(-1920,0,1920,1080)),(-1800,100,811,513))
+    def test_destination_fit_and_negative_y(self):
+        from myrecorder.regions import move_to_monitor
+        self.assertEqual(move_to_monitor((0,0,1920,1080),0,-1000,(0,-720,1280,720)),(0,-720,1280,720))
+    def test_invalid_values(self):
+        from myrecorder.regions import move_to_monitor
+        for delta in [float('nan'),float('inf')]:
+            with self.assertRaises(ValueError):move_to_monitor((0,0,100,100),delta,0,(0,0,1920,1080))
+
+
 if __name__=='__main__':unittest.main()

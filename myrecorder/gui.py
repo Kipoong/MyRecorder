@@ -10,6 +10,7 @@ from PySide6.QtGui import QColor, QPainter, QPen, QShortcut, QKeySequence
 from PySide6.QtWidgets import (QApplication, QWidget, QMainWindow, QPushButton, QLabel,
     QLineEdit, QComboBox, QCheckBox, QFileDialog, QMessageBox, QGridLayout, QDialog, QDialogButtonBox, QScrollArea)
 from .recorder import Options, Recorder
+from .media import binary
 from .audio import Diagnostics, device_choices
 from .titles import TitleError, foreground_window, list_windows, window_title, ocr_title
 from .display import DisplayError, physical_region, capture_png, screen_snapshot
@@ -123,7 +124,7 @@ class StorageDialog(QDialog):
 class Window(QMainWindow):
     def __init__(self, store=None, check_startup=True):
         super().__init__()
-        self.setWindowTitle('MyRecorder V0.4.2 — Windows 11')
+        self.setWindowTitle('MyRecorder V0.4.3 — Windows 11')
         self.settings = store or SettingsStore()
         self.paths = self.settings.load()
         self.recorder = None
@@ -139,6 +140,12 @@ class Window(QMainWindow):
         self.capture_pending = False
         self.picker_pending = False
         self.title_source = 'default'
+        self._last_idle_validation = 0.0
+        self.region_valid = False
+        self.engine_error = None
+        try:
+            binary('ffmpeg');binary('ffprobe')
+        except RuntimeError as exc:self.engine_error=str(exc)
         self.coordinate_log = None
         self.coordinate_log_folder = None
         self.coordinate_log_error = None
@@ -148,6 +155,7 @@ class Window(QMainWindow):
         self._last_overlay_policy = None
         self.border = RegionOverlay()
         self.border.regionChanged.connect(self.overlay_region_changed)
+        self.border.moveRequested.connect(self.overlay_move_requested)
         self.picker = None
         root = QWidget()
         scroll = QScrollArea()
@@ -405,7 +413,25 @@ class Window(QMainWindow):
         self.region = QRect(rect)
         self.region_screen = screen or self.current_screen()
         self.selected_screen_identity = screen_snapshot(self.region_screen)
-        self.sync_overlay()
+        self.refresh()
+    def overlay_move_requested(self, point, original, dx, dy):
+        if self.state!='idle' or self.job or self.capture_pending or self.picker_pending or self._recording_transition:return
+        from .regions import move_to_monitor
+        screens=QApplication.screens()
+        values=lambda rect:(rect.x(),rect.y(),rect.width(),rect.height())
+        target=QApplication.screenAt(point)
+        if target not in screens:return  # gaps in a mixed-DPI desktop are not screens
+        bounds=target.geometry()
+        result=move_to_monitor(values(original),dx,dy,values(bounds))
+        # Validate target identity and physical coordinates before changing ownership.
+        try:physical_region(target,QRect(*result),qt_screens=screens,
+                            diagnostics=self.coordinate_event,operation='overlay_monitor_transfer')
+        except DisplayError as exc:
+            self.status.setText(str(exc));return
+        index=next((i for i in range(self.screen.count()) if self.screen.itemData(i)==target),-1)
+        if index>=0:self.screen.setCurrentIndex(index)
+        self.set_region(QRect(*result),target)
+
     def overlay_region_changed(self, rect):
         if self.state!='idle' or self.job or self.capture_pending or self.picker_pending or self._recording_transition:
             return
@@ -451,6 +477,7 @@ class Window(QMainWindow):
     def sync_overlay(self, *unused):
         if not hasattr(self,'border_toggle'):return
         if self.region_screen not in QApplication.screens():
+            self.region_valid=False
             self.border.hide()
             self.border_hint.setText('모니터가 변경되었습니다. 영역을 다시 선택하세요.')
             return
@@ -458,8 +485,9 @@ class Window(QMainWindow):
         try:physical=self.map_selected('preview')
         except DisplayError as exc:
             self.status.setText('화면 좌표 확인 필요: '+str(exc))
+        self.region_valid=physical is not None
         live=getattr(self.recorder,'process',None) is not None
-        phase='paused' if self.state=='saving' else 'recording' if self.state=='recording' or self._recording_transition or live else 'paused' if self.state=='paused' else 'idle'
+        phase='saving' if self.state=='saving' else 'save_failed' if self.state=='save_failed' else 'recording' if self.state=='recording' or self._recording_transition or live else 'paused' if self.state=='paused' else 'idle'
         editable=self.state=='idle' and not self.job and not self.capture_pending and not self.picker_pending and not self._recording_transition
         self.border.configure(self.region,self.region_screen.geometry(),physical,phase,
             visible=self.border_toggle.isChecked(),editable=editable,
@@ -473,6 +501,7 @@ class Window(QMainWindow):
 
     def update_overlay_feedback(self):
         if self.region_screen not in QApplication.screens():
+            self.region_valid=False
             self.border.hide()
             self.border_hint.setText('모니터가 변경되었습니다. 영역을 다시 선택하세요.')
             return
@@ -517,15 +546,18 @@ class Window(QMainWindow):
             self.status.setText('저장 경로 설정 완료. 다음 실행에도 유지됩니다.')
 
     def refresh(self):
-        busy = self.job is not None or self.capture_pending or self.picker_pending
+        self.sync_overlay()
+        busy = self.job is not None or self.capture_pending or self.picker_pending or self._recording_transition
         for control in self.controls:
             control.setEnabled(self.state == 'idle' and not busy)
-        self.start_button.setEnabled(self.state == 'idle' and not busy)
+        self.start_button.setEnabled(self.state == 'idle' and not busy and self.region_valid and self.engine_error is None and self.recorder is None)
+        self.start_button.setToolTip(self.engine_error or ('화면 좌표 진단으로 영역을 확인하세요.' if not self.region_valid else '선택한 영역으로 새 녹화 시작'))
+        self.start_button.setText('준비 중…' if self._recording_transition else '녹화 시작')
         self.pause_button.setEnabled(self.state in ('recording', 'paused') and not busy)
         self.pause_button.setText('재개' if self.state == 'paused' else '일시정지')
-        self.stop_button.setEnabled(self.state in ('recording', 'paused') and not busy)
+        self.stop_button.setEnabled(self.state in ('recording', 'paused', 'save_failed') and not busy)
+        self.stop_button.setText('저장 중…' if self.state=='saving' else '저장 재시도' if self.state=='save_failed' else '종료 / MP4 저장')
         self.border_toggle.setEnabled(not busy)
-        self.sync_overlay()
     def submit(self, fn, success, reset_start=False, on_error=None):
         if self.job is not None:
             return
@@ -534,18 +566,22 @@ class Window(QMainWindow):
             job = self.job
             job.wait()
             self.job = None
+            job.deleteLater()
             if error and on_error:
                 on_error(error)
             elif error:
+                was_saving=self.state=='saving'
                 self._recording_transition=False
                 recovery = str(self.recorder.folder) if self.recorder else self.paths.temp
-                if reset_start and (self.recorder is None or self.recorder.process is None):
+                if reset_start and (self.recorder is None or (self.recorder.process is None and not getattr(self.recorder,'audio',[]))):
                     self.state = 'idle'
                     self.recorder = None
-                elif self.recorder and self.recorder.process is None:
-                    self.state = 'paused'
+                elif was_saving:
+                    self.state='save_failed'
+                elif self.recorder:
+                    self.state = 'save_failed' if self.recorder.process is not None or getattr(self.recorder,'audio',[]) else 'paused'
                 self.status.setText('오류 — 임시 파일 보존됨: ' + recovery)
-                self.sync_overlay()
+                self.refresh()
                 QMessageBox.critical(self, '오류 / 복구 경로', error[-4500:] + '\n\n임시 파일: ' + recovery)
             else:
                 success(result)
@@ -556,6 +592,9 @@ class Window(QMainWindow):
     def start(self):
         if self.state != 'idle' or self.job or self.capture_pending or self.picker_pending:
             return
+        if self.recorder is not None:return
+        if self.engine_error:
+            QMessageBox.warning(self,'녹화 엔진 준비',self.engine_error);return
         if not self.check_storage():
             return
         try:
@@ -577,6 +616,7 @@ class Window(QMainWindow):
             if events:events.write('overlay_capture_policy',**policy)
             self.recorder.start()
         self._recording_transition=True
+        self.set_clock(0)
         self.sync_overlay()
         policy=self.overlay_policy()
         self.status.setText('장치 준비 중… 선택한 출력 장치로 소리를 재생하세요. 첫 패킷 지연은 즉시 실패 처리하지 않습니다.')
@@ -602,22 +642,26 @@ class Window(QMainWindow):
                 self.status.setText('일시정지 — 구간 파일 보존됨')
             self.submit(self.recorder.pause, finished)
     def stop(self):
-        if self.job or self.state not in ('recording', 'paused'):
+        if self.job or self.state not in ('recording', 'paused','save_failed'):
             return
         self.state='saving'
         self.sync_overlay()
         self.status.setText('MP4 저장 중… 창을 닫지 마세요.')
         def finished(path):
-            self.last = path
-            self.state = 'idle'
-            self.sync_overlay()
-            self.set_clock(self.recorder.final_duration if self.recorder.final_duration is not None else self.recorder.elapsed)
-            self.status.setText('저장 완료: ' + str(path) + '\n복구용 임시 폴더는 확인 후 직접 삭제하세요.')
-            warnings = list(dict.fromkeys(self.recorder.manifest['warnings']))
-            log = self.recorder.diagnostics.path
-            self.recorder = None
+            previous=self.recorder
+            self.last=path
+            duration=previous.final_duration if previous.final_duration is not None else previous.elapsed
+            warnings=list(dict.fromkeys(previous.manifest['warnings']))
+            log=previous.diagnostics.path
+            # Release session ownership BEFORE restoring editable idle UI.
+            self.recorder=None
+            self._recording_transition=False
+            self.state='idle'
+            self.set_clock(duration)
+            self.refresh()
+            self.status.setText('저장 완료: '+str(path)+'\n대기 — 같은 영역으로 시작하거나 초록 테두리를 이동하세요. 임시 원본은 보존되었습니다.')
             if warnings:
-                QMessageBox.warning(self, '저장 완료 / 오디오 확인 필요', '\n'.join(warnings)[-3000:] + f'\n로그: {log}\n영상은 저장되었습니다. 오디오를 직접 확인하세요.')
+                QMessageBox.warning(self,'저장 완료 / 오디오 확인 필요','\n'.join(warnings)[-3000:]+f'\n로그: {log}\n영상은 저장되었습니다. 오디오를 직접 확인하세요.')
         self.submit(self.recorder.finish, finished)
     def set_clock(self, seconds):
         seconds=max(0,int(seconds))
@@ -625,6 +669,9 @@ class Window(QMainWindow):
 
     def tick(self):
         self.update_overlay_feedback()
+        if self.state=='idle' and not self.job and time.monotonic()-self._last_idle_validation>=1:
+            self._last_idle_validation=time.monotonic()
+            self.refresh()
         if self.state=='idle' and not self.job and os.name=='nt':
             try:
                 external=foreground_window()
@@ -651,11 +698,11 @@ class Window(QMainWindow):
         except Exception as exc:
             QMessageBox.warning(self, '폴더 열기 실패', str(exc))
     def closeEvent(self, event):
-        if self.job or self.capture_pending or self.state == 'recording':
+        if self.job or self.capture_pending or self.state in ('recording','saving') or (self.recorder is not None and (self.recorder.process is not None or getattr(self.recorder,'audio',[]))):
             QMessageBox.information(self,'작업 진행 중','녹화 중이면 종료 / MP4 저장을 완료하고, 인식·저장 작업 중이면 완료된 뒤 창을 닫으세요.')
             event.ignore()
             return
-        if self.state == 'paused' and self.recorder is not None:
+        if self.state in ('paused','save_failed') and self.recorder is not None:
             answer=QMessageBox.question(self,'원본을 보존하고 종료',
                 f'MP4 저장을 완료하지 않았습니다. 원본 세션을 보존하고 종료할까요?\n{self.recorder.folder}',
                 QMessageBox.Yes|QMessageBox.No,QMessageBox.No)

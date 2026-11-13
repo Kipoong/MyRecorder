@@ -97,6 +97,19 @@ class AudioTests(unittest.TestCase):
         self.assertEqual(len(set(self.module.native_threads)),1)
         self.assertNotEqual(self.module.native_threads[0],threading.get_ident())
 
+    def test_three_tracks_close_controller_writer_and_stream(self):
+        for index in range(3):
+            track=AudioTrack(self.folder/f'cycle-{index}.wav',True,log=self.log,module=self.module)
+            track.start();track.close()
+            self.assertTrue(track.resources_released)
+            self.assertFalse(track._controller.is_alive())
+            self.assertFalse(track.writer.is_alive())
+            self.assertIsNone(track.stream)
+            self.assertIsNone(track.pa)
+            self.assertTrue(self.module.stream.closed)
+            track.close()  # idempotent after both threads exit
+        self.assertEqual(self.module.terminated,3)
+
     def test_default_pairs_wasapi_speaker_not_mme(self):
         choices=device_choices(self.log,self.module)
         selected=next(c for c in choices if c['default'])

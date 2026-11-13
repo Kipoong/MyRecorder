@@ -91,5 +91,34 @@ class MediaIntegration(unittest.TestCase):
             self.assertEqual(probe(output)['streams'][0]['codec_type'],'video')
 
 
-if __name__ == '__main__':
-    unittest.main()
+
+
+class ConsecutiveMediaTests(unittest.TestCase):
+    def test_three_real_mp4_saves_keep_previous_outputs_and_audio(self):
+        import hashlib
+        import shutil
+        with tempfile.TemporaryDirectory(prefix='continuous media 한글 ') as d:
+            root=Path(d);destination=root/'Recordings';destination.mkdir()
+            video=root/'sample.mkv';audio=root/'sample.wav'
+            run([binary('ffmpeg'),'-y','-v','error','-f','lavfi','-i','testsrc2=size=320x180:rate=15:duration=0.6',
+                 '-c:v','libx264','-pix_fmt','yuv420p',str(video)])
+            run([binary('ffmpeg'),'-y','-v','error','-f','lavfi','-i','sine=frequency=440:sample_rate=48000:duration=0.6',str(audio)])
+            hashes={}
+            for index in range(3):
+                session=root/f'session-{index}';session.mkdir()
+                shutil.copyfile(video,session/'0000.mkv');shutil.copyfile(audio,session/'system.wav')
+                (session/'session.json').write_text(json.dumps({'segments':[{'index':0,'usable':True,
+                    'tracks':[{'file':'system.wav','offset':0.}]}]}))
+                result=assemble(session,destination,'Example Lecture')
+                self.assertNotIn(result,hashes)
+                hashes[result]=hashlib.sha256(result.read_bytes()).hexdigest()
+                self.assertEqual({s['codec_type'] for s in probe(result)['streams']},{'audio','video'})
+                timing=media_timing(result)
+                self.assertAlmostEqual(timing['video_duration'],timing['audio_duration'],delta=.25)
+                run([binary('ffmpeg'),'-v','error','-i',str(result),'-f','null','-'])
+                for path,digest in hashes.items():
+                    self.assertEqual(hashlib.sha256(path.read_bytes()).hexdigest(),digest)
+            self.assertEqual(len(list(destination.glob('*.mp4'))),3)
+
+
+if __name__=='__main__':unittest.main()

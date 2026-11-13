@@ -63,6 +63,8 @@ class Recorder:
         os.replace(tmp, self.folder / 'session.json')
 
     def start(self):
+        if self.process is not None or self.audio:
+            raise RuntimeError('이전 녹화 자원이 아직 정리되지 않았습니다. 종료 / 저장을 다시 시도하세요.')
         self.stop_requested_at = None
         index = len(self.manifest['segments'])
         self.events.write('segment_begin', index=index, rect=self.options.rect, fps=self.options.fps,
@@ -143,8 +145,9 @@ class Recorder:
                 # Even snapshot failure must not prevent closing the audio device/WAV.
                 try: audio.close()
                 except Exception as cleanup: errors.append(str(cleanup))
-        self.audio = []
-        if self.segment is not None:
+        self.audio = [audio for audio in self.audio if not getattr(audio,'resources_released',True)]
+        if self.audio:errors.append('오디오 자원 종료 미확인. 새 녹화를 시작하지 말고 로그를 확인하세요.')
+        if self.segment is not None and self.process is not None:
             self.segment['tracks'] = tracks
         proc = self.process
         try:
@@ -153,14 +156,18 @@ class Recorder:
                     proc.communicate(b'q\n', timeout=20)
                 if proc.returncode:
                     errors.append('FFmpeg 비정상 종료: 구간 로그를 확인하세요.')
-        except subprocess.TimeoutExpired:
-            proc.kill()
-            proc.wait()
-            errors.append('FFmpeg 종료 시간 초과. 임시 구간을 복구하세요.')
         except Exception as exc:
-            errors.append(str(exc))
+            errors.append('FFmpeg 종료 오류: '+str(exc))
+            try:
+                proc.kill();proc.wait(timeout=5)
+            except Exception as cleanup:errors.append('FFmpeg 강제 종료 미확인: '+str(cleanup))
         finally:
-            if proc is not None:
+            released=proc is None or proc.poll() is not None
+            if proc is not None and released:
+                stream=getattr(proc,'stdin',None)
+                if stream is not None:
+                    try:stream.close()
+                    except Exception as exc:errors.append(str(exc))
                 wall = time.monotonic() - self.started
                 try:
                     info = probe(self.folder / f"{self.segment['index']:04d}.mkv")
@@ -172,7 +179,8 @@ class Recorder:
                     self.elapsed += wall
                     self.segment['duration_warning'] = str(exc)
                 self.segment['wall_elapsed'] = wall
-            self.process = None
+            self.process = None if released else proc
+            if not released:errors.append('FFmpeg가 아직 실행 중입니다. 종료를 재시도하세요.')
             if self.log is not None:
                 self.log.close()
                 self.log = None
@@ -206,6 +214,8 @@ class Recorder:
     def finish(self):
         try:
             self.pause()
+            if self.process is not None or self.audio:
+                raise RuntimeError('녹화 자원 정리를 확인하지 못하여 저장을 중단했습니다.')
             result = assemble(self.folder, self.options.folder, self.options.title)
             timing = media_timing(result)
             durations=[segment.get('duration') for segment in self.manifest['segments'] if segment.get('usable')]

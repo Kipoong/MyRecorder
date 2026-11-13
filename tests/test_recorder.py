@@ -73,5 +73,36 @@ class LifecycleTests(unittest.TestCase):
         self.assertEqual(raw.read_bytes(),b'original')
         self.assertEqual(recorder.manifest['status'],'save_failed')
 
+    def test_communicate_failure_kills_and_reaps_ffmpeg(self):
+        import io
+        recorder=Recorder(self.options);recorder.start();proc=recorder.process
+        proc.stdin=io.BytesIO()
+        def kill():proc.returncode=-9
+        proc.kill=kill;proc.wait=lambda timeout:proc.returncode
+        proc.communicate=lambda *args,**kwargs:(_ for _ in ()).throw(OSError('synthetic broken pipe'))
+        with self.assertRaisesRegex(RuntimeError,'synthetic broken pipe'):recorder.pause()
+        self.assertIsNone(recorder.process)
+        self.assertIsNone(recorder.log)
+        self.assertTrue(proc.stdin.closed)
+
+    def test_unreaped_process_is_retained_and_blocks_restart(self):
+        recorder=Recorder(self.options);recorder.start();proc=recorder.process
+        def fail(*args,**kwargs):raise OSError('synthetic cannot close')
+        proc.communicate=fail;proc.kill=fail
+        with self.assertRaises(RuntimeError):recorder.pause()
+        self.assertIs(recorder.process,proc)
+        with self.assertRaisesRegex(RuntimeError,'이전 녹화 자원'):recorder.start()
+
+    def test_unreleased_audio_is_retained_for_cleanup_retry(self):
+        recorder=Recorder(self.options)
+        audio=SimpleNamespace(snapshot=lambda:{'state':'SILENT','detail':'example silence'},close=lambda:None,
+                              started=0,error=None,resources_released=False)
+        recorder.audio=[audio]
+        with self.assertRaisesRegex(RuntimeError,'오디오 자원'):recorder.pause()
+        self.assertEqual(recorder.audio,[audio])
+        with self.assertRaises(RuntimeError):recorder.start()
+        audio.resources_released=True;recorder.pause()
+        self.assertEqual(recorder.audio,[])
+
 
 if __name__=='__main__': unittest.main()

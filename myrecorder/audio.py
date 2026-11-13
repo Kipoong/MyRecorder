@@ -189,6 +189,7 @@ class AudioTrack:
         self.timestamp_source = 'monotonic'
         self.status_flags = 0
         self.closed = False
+        self.cleanup_error = None
         self.queue = queue.Queue(maxsize=256)
         self.stopping = threading.Event()
         self.ready = threading.Event()
@@ -409,11 +410,20 @@ class AudioTrack:
             self.last_state = state
         return result
 
+    @property
+    def resources_released(self):
+        return (self.closed and self.stream is None and self.pa is None and not self.cleanup_error
+                and not self._controller.is_alive()
+                and (self.writer is None or not self.writer.is_alive()))
+
     def close(self):
-        if self.closed:
-            return
         try:
-            self._request('close')
+            if not self.closed:self._request('close')
+            # The command future resolves just before the controller returns.
+            # Join it before allowing another recording to open WASAPI.
+            self._controller.join(timeout=2)
+            if self._controller.is_alive():
+                raise AudioError('DEVICE_CLOSE_TIMEOUT','WASAPI 제어 스레드가 종료되지 않았습니다.')
         except Exception as exc:
             self.error = self.error or f'[AUDIO_CLOSE_FAILED] {exc}'
             self.log.write('close_failed', file=self.path.name, error=self.error)
@@ -451,7 +461,8 @@ class AudioTrack:
                 errors.append(str(exc))
             self.pa = None
         if errors:
-            self.error = '[AUDIO_CLOSE_FAILED] ' + '; '.join(errors)
+            self.cleanup_error = '; '.join(errors)
+            self.error = '[AUDIO_CLOSE_FAILED] ' + self.cleanup_error
         self.log.write('stream_closed', file=self.path.name, received_frames=self.received_frames,
                        written_frames=self.frames, error=self.error, cleanup_errors=errors)
 
