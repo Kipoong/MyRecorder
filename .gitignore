@@ -38,3 +38,7 @@ session-*/
 # Local audio diagnostics
 *.jsonl
 audio-test-*/
+# Optional local OCR binaries and language models
+bin/tesseract/
+*.dll
+*.traineddata

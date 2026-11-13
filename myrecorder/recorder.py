@@ -8,7 +8,7 @@ import time
 import uuid
 from .audio import AudioTrack, Diagnostics
 from .settings import StoragePaths, prepare_storage
-from .media import binary, CREATE_NO_WINDOW, assemble
+from .media import binary, CREATE_NO_WINDOW, assemble, probe, media_timing
 
 
 @dataclass
@@ -24,6 +24,7 @@ class Options:
     system: bool = True
     mic: bool = False
     system_device: dict | None = None
+    title_source: str = 'manual'
 
 
 class Recorder:
@@ -37,7 +38,9 @@ class Recorder:
         self.folder = directories['temp'] / ('session-' + uuid.uuid4().hex)
         self.folder.mkdir()
         self.diagnostics = Diagnostics(self.folder / 'audio-diagnostics.jsonl')
-        self.manifest = {'version': 2, 'title': options.title, 'title_source': 'manual',
+        self.events = Diagnostics(self.folder / 'recording-events.jsonl')
+        self.manifest = {'version': 3, 'owner': 'MyRecorder', 'status': 'created',
+                         'title': options.title, 'title_source': options.title_source,
                          'recordings_folder': str(options.folder),
                          'converted_folder': str(directories['converted']),
                          'temp_folder': str(directories['temp']), 'segments': [], 'warnings': []}
@@ -47,6 +50,8 @@ class Recorder:
         self.segment = None
         self.started = 0.0
         self.elapsed = 0.0
+        self.final_duration = None
+        self.stop_requested_at = None
         self.save_manifest()
 
     def save_manifest(self):
@@ -58,7 +63,10 @@ class Recorder:
         os.replace(tmp, self.folder / 'session.json')
 
     def start(self):
+        self.stop_requested_at = None
         index = len(self.manifest['segments'])
+        self.events.write('segment_begin', index=index, rect=self.options.rect, fps=self.options.fps,
+                          system=self.options.system, microphone=self.options.mic)
         x, y, w, h = self.options.rect
         self.audio = []
         self.segment = {'index': index, 'tracks': [], 'complete': False, 'usable': False}
@@ -87,15 +95,20 @@ class Recorder:
                 audio.wait_ready(timeout=1.0)
             self.segment['tracks'] = [dict(self.track_info(audio), offset=max(0, audio.started-self.started)) for audio in self.audio]
             self.segment['usable'] = True
+            self.manifest['status'] = 'recording'
+            self.events.write('segment_started', index=index, monotonic=self.started)
             self.save_manifest()
         except Exception as exc:
             self.segment['startup_error'] = str(exc)
+            self.manifest['status'] = 'failed'
+            self.events.write('start_failed', index=index, error=str(exc))
             self.manifest['warnings'].append(str(exc))
             self.diagnostics.write('segment_start_failed', index=index, error=str(exc))
             try:
                 self.pause()
             except Exception as cleanup:
                 self.diagnostics.write('cleanup_failed', error=str(cleanup))
+            self.manifest['status'] = 'failed'
             self.save_manifest()
             raise RuntimeError(f'{exc}\n오디오 진단 로그: {self.diagnostics.path}\n임시 세션은 보존되었습니다: {self.folder}') from exc
 
@@ -108,6 +121,7 @@ class Recorder:
     def pause(self):
         if self.process is None and not self.audio:
             return
+        self.stop_requested_at = time.monotonic()
         errors = []
         tracks = []
         for audio in self.audio:
@@ -147,7 +161,17 @@ class Recorder:
             errors.append(str(exc))
         finally:
             if proc is not None:
-                self.elapsed += time.monotonic() - self.started
+                wall = time.monotonic() - self.started
+                try:
+                    info = probe(self.folder / f"{self.segment['index']:04d}.mkv")
+                    duration = float(info['format']['duration'])
+                    if not 0 < duration < float('inf'): raise ValueError('invalid duration')
+                    self.segment['duration'] = duration
+                    self.elapsed += duration
+                except Exception as exc:
+                    self.elapsed += wall
+                    self.segment['duration_warning'] = str(exc)
+                self.segment['wall_elapsed'] = wall
             self.process = None
             if self.log is not None:
                 self.log.close()
@@ -155,6 +179,9 @@ class Recorder:
             if self.segment is not None:
                 self.segment['complete'] = bool(self.segment['usable']) and not errors
             self.manifest['warnings'].extend(errors)
+            self.manifest['status'] = 'paused' if not errors else 'failed'
+            self.events.write('segment_closed', index=self.segment['index'] if self.segment else None,
+                              errors=errors, measured_elapsed=self.elapsed)
             self.diagnostics.write('segment_closed', errors=errors, tracks=tracks)
             self.save_manifest()
         if errors:
@@ -177,5 +204,27 @@ class Recorder:
         return '오디오 수신 중' if states else '시스템 소리·마이크 해제 — 무음 화면 녹화 중'
 
     def finish(self):
-        self.pause()
-        return assemble(self.folder, self.options.folder, self.options.title)
+        try:
+            self.pause()
+            result = assemble(self.folder, self.options.folder, self.options.title)
+            timing = media_timing(result)
+            durations=[segment.get('duration') for segment in self.manifest['segments'] if segment.get('usable')]
+            if durations and all(value is not None for value in durations):
+                timing['segment_duration_sum']=sum(durations)
+                timing['duration_difference']=timing['video_duration']-sum(durations)
+                if abs(timing['duration_difference'])>max(0.25,len(durations)/self.options.fps):
+                    timing['warnings'].append('구간 합계와 최종 영상 길이가 다릅니다. 원본과 재생 시간을 확인하세요.')
+            self.final_duration = timing['video_duration']
+            self.manifest['warnings'].extend(timing['warnings'])
+            self.manifest['owner'] = 'MyRecorder'
+            self.manifest['status'] = 'saved'
+            self.manifest['output'] = {'path': str(result), 'size': result.stat().st_size, **timing}
+            self.events.write('save_completed', output=str(result), **timing)
+            self.save_manifest()
+            return result
+        except Exception as exc:
+            self.manifest['status'] = 'save_failed'
+            self.events.write('save_failed', error=str(exc))
+            try: self.save_manifest()
+            except Exception: pass
+            raise RuntimeError(f'{exc}\n원본 세션 보존: {self.folder}\n녹화 로그: {self.events.path}') from exc

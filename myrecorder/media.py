@@ -87,6 +87,25 @@ def probe(path: Path) -> dict:
     return data
 
 
+def media_timing(path: Path) -> dict:
+    """Length audit only: this does not measure lip sync or audio quality."""
+    import math
+    data = probe(path)
+    video = next(s for s in data['streams'] if s['codec_type']=='video')
+    duration = float(video.get('duration', data['format']['duration']))
+    if not math.isfinite(duration) or duration <= 0:
+        raise RuntimeError('영상 재생 시간을 확인할 수 없습니다.')
+    audio = next((s for s in data['streams'] if s['codec_type']=='audio'),None)
+    audio_duration = float(audio.get('duration', data['format']['duration'])) if audio else None
+    warnings = []
+    if audio_duration is not None and not math.isfinite(audio_duration):
+        audio_duration=None
+        warnings.append('음성 재생 시간을 확인하지 못했습니다. 실제 음성 재생을 확인하세요.')
+    elif audio_duration is not None and abs(audio_duration-duration)>0.25:
+        warnings.append('영상·음성 스트림 길이 차이가 250ms를 넘습니다. 실제 싱크를 확인하세요.')
+    return {'video_duration': duration, 'audio_duration': audio_duration, 'warnings': warnings}
+
+
 def mux_segment(folder: Path, index: int, tracks: list[dict]) -> Path:
     video = folder / f'{index:04d}.mkv'
     out = folder / f'{index:04d}-ready.mp4'

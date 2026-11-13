@@ -3,7 +3,7 @@ from pathlib import Path
 import subprocess
 import tempfile
 import unittest
-from myrecorder.media import safe_title, publish, convert, probe, assemble, binary, run
+from myrecorder.media import safe_title, publish, convert, probe, assemble, binary, run, media_timing
 from myrecorder.cli import repair_wav
 import wave
 
@@ -65,6 +65,30 @@ class MediaIntegration(unittest.TestCase):
             streams={s['codec_type']:s for s in final['streams']}
             self.assertAlmostEqual(float(streams['video']['duration']),float(streams['audio']['duration']),delta=.25)
             run([binary('ffmpeg'),'-v','error','-i',str(slowed),'-f','null','-'])
+
+    def test_saved_session_cleanup_with_real_mp4(self):
+        from myrecorder.maintenance import saved_sessions, cleanup_sessions
+        with tempfile.TemporaryDirectory(prefix='real-cleanup-') as directory:
+            root=Path(directory);temp=root/'Temp';temp.mkdir()
+            session=temp/('session-'+'b'*32);session.mkdir()
+            destination=root/'Recordings';destination.mkdir()
+            run([binary('ffmpeg'),'-y','-v','error','-f','lavfi','-i','testsrc2=size=320x180:rate=15:duration=1',
+                 '-c:v','libx264','-pix_fmt','yuv420p',str(session/'0000.mkv')])
+            data={'version':3,'owner':'MyRecorder','status':'paused','recordings_folder':str(destination),
+                  'segments':[{'index':0,'tracks':[],'complete':True,'usable':True}]}
+            manifest=session/'session.json';manifest.write_text(json.dumps(data))
+            output=assemble(session,destination,'Example Lecture')
+            timing=media_timing(output)
+            self.assertAlmostEqual(timing['video_duration'],1,delta=.1)
+            self.assertIsNone(timing['audio_duration'])
+            self.assertEqual(saved_sessions(temp),[])
+            data.update(status='saved',output={'path':str(output),'size':output.stat().st_size,**timing})
+            manifest.write_text(json.dumps(data))
+            self.assertEqual(len(saved_sessions(temp)),1)
+            cleanup_sessions(temp,[session])
+            self.assertFalse(session.exists())
+            self.assertTrue(output.exists())
+            self.assertEqual(probe(output)['streams'][0]['codec_type'],'video')
 
 
 if __name__ == '__main__':

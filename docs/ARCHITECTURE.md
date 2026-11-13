@@ -5,6 +5,9 @@
 ```
 myrecorder/
   settings.py    개발 폴더 settings.json, 세 저장 위치 검증·생성·OneDrive 차단
+  titles.py      Win32 창 제목 / 수동 Tesseract OCR (선택 설치)
+  display.py     Qt 논리 영역 → 모니터별 Win32 물리 좌표 / 메모리 OCR 이미지
+  maintenance.py 검증된 완료 세션의 명시적 정리
   gui.py         PySide6 GUI, 영역 선택, 작업 스레드
   recorder.py    Windows gdigrab 구간 녹화, 세션 메타데이터
   audio.py       PyAudioWPatch WASAPI loopback / 기본 입력 PCM
@@ -58,11 +61,13 @@ aresample=async=1만으로 장치 간 장시간 시계 드리프트가 해결된
 
 ## 운영 제한
 
-모든 모니터 100% 배율을 MVP 전제로 하고 Qt devicePixelRatio 검사로 제한.
+V0.4는 Qt 6의 기본 모니터별 DPI 인식을 사용하고 선택 영역을 물리 좌표로 변환.
+100/125/150% 수학 검사는 통과했지만 Windows에서 각 배율의 실기 확인은 대기.
+화면 대응/인식 모드가 불확실하면 경고하고 시작을 차단.
 다중 모니터 음수 좌표와 다양한 GPU/배율은 Windows 실기에서 확인해야 함.
 앱 창·알림·테두리는 제외 캡처를 보장하지 않음. 한 모니터 내 영역만 선택.
-타이머는 경과 시각으로 실제 미디어 길이와 약간 다를 수 있음.
-저장 작업에 취소 UI·자동 디스크 용량 모니터·자동 임시 파일 정리 없음.
+실시간 타이머는 추정이며 닫힌 구간은 ffprobe 길이로 보정하고 저장 후 최종 영상 길이를 표시.
+저장 취소 UI·자동 디스크 모니터·자동 정리 스케줄은 없음. V0.4는 정상 완료 세션 수동 정리 UI 제공.
 GUI 오류 후 프로세스가 살아 있으면 종료 버튼으로 재시도할 수 있음.
 구간이 손상되어 계속 저장 실패하면 임시 폴더를 보존하고 작업 관리자로 종료.
 
@@ -100,3 +105,24 @@ WASAPI/COM 관련 PyAudio 생성·장치 열기·start·is_active·stop·termina
 무음 패딩 프레임과 실제 수신 프레임은 별도 계수하여 패딩을 수신 성공으로 오인하지 않음.
 장치 선택은 현재 GUI 세션 동안 유지되며 디스크 설정 스키마·기존 미디어 경로는 불변.
 상세 한계·로그·Windows 테스트는 WINDOWS_AUDIO_V0.3.md 참고.
+
+## V0.4 독립 기능과 원본 보호
+
+V0.3 audio.py는 변경하지 않음. FFmpeg의 gdigrab, x264, 커서·FPS·패딩 인자는 유지.
+GUI에서 선택한 DIP 영역만 display.physical_region으로 모니터별 물리 좌표에 대응.
+구형 SetProcessDPIAware를 제거하고 EXE에 windows.manifest를 사용.
+
+제목 인식은 대기 상태에서만 실행. 창 제목 Win32 API는 제목 문자열만 읽으며 브라우저 내부에
+접근하지 않음. OCR 선택 영역은 GUI 스레드에서 PNG로 만들고 메모리 stdin으로 Tesseract에 전달.
+OCR subprocess는 작업 스레드에서 실행하고 언어·실행 시간·오류를 검사.
+실패 시 기존 입력 유지, 인식 결과는 normalize_title → safe_title을 거쳐 사용자에게 표시.
+사용자 수정은 title_source를 manual로 바꾸고 세션에 출처를 기록. 설정 스키마는 유지.
+
+세션 매니페스트 version=3, owner=MyRecorder, status를 기록. 기존 복구/결합은 이전 버전과 호환.
+추가 recording-events.jsonl에 구간 경계·물리 영역·저장 오류 기록. 일시정지 후 영상 구간 길이,
+저장 후 최종 비디오/오디오 길이와 구간 합계를 확인. 이는 실제 음성 내용 싱크 검사는 아님.
+
+정리는 사용자가 요청한 경우에만 수행. saved 표식, 모든 구간 complete, 실제 최종 MP4의
+경로/크기/probe를 확인하고 삭제 직전에 재검사. 세션 내부 링크/정션, 세션 안 최종 MP4,
+불완전 구간이나 과거 버전 세션은 거부. raw 원본은 기본적으로 보관하며 실패 시 자동 삭제하지 않음.
+상세 설명과 검증 구분은 WINDOWS_V0.4.md, VALIDATION.md 참고.
