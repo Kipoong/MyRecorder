@@ -138,3 +138,11 @@ GUI 선택 영역을 별도 RegionOverlay로 표시하고 idle일 때만 편집 
 실제 캡처 중(시작/재개/저장 종료 경계 포함) 제외 미확인이면 표시하지 않음.
 OS API 성공은 실제 gdigrab 제외 시험을 대신하지 않음. 네이티브 Windows 검증 대기.
 자세한 소스 판정과 사용법은 REGION_OVERLAY_V0.4.1.md 참고.
+
+## V0.4.2 디스플레이 경계
+
+`dpi_bootstrap.py`가 Qt 가져오기 전에 한 번 DPI 정책을 설정합니다.
+`winmon.py`는 Win32 물리 모드·모니터 식별/DPI를 수집하고 `display.py`는 Qt 화면과
+검증된 고유 대응을 구성합니다. `coordinate_log.py`는 설정 Temp에만 JSONL을 씁니다.
+GUI는 선택한 QScreen 객체와 선택 시 이름/좌표/DPR을 유지하고 녹화 시작 직전 재검증합니다.
+오류 발생 시 Recorder 생성 전에 중단합니다. 기존 녹화·오디오·저장 모듈은 그대로입니다.

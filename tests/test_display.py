@@ -21,8 +21,8 @@ class DisplayTests(unittest.TestCase):
         screen=SimpleNamespace(geometry=lambda:rect(0,0,1280,720),name=lambda:'EXAMPLE_DISPLAY',devicePixelRatio=lambda:1.5)
         with patch('myrecorder.display.native_monitors',return_value=[NativeMonitor('EXAMPLE_DISPLAY',(0,0,1920,1080))]),patch('myrecorder.display.dpi_awareness',return_value=2):
             self.assertEqual(physical_region(screen,rect(100,50,400,200)),(150,75,600,300))
-        with patch('myrecorder.display.native_monitors',return_value=[NativeMonitor('OTHER_DISPLAY',(0,0,1920,1080))]):
-            with self.assertRaises(DisplayError): physical_region(screen,rect(0,0,100,100))
+        with patch('myrecorder.display.native_monitors',return_value=[NativeMonitor('OTHER_DISPLAY',(0,0,1920,1080))]),patch('myrecorder.display.dpi_awareness',return_value=2):
+            self.assertEqual(physical_region(screen,rect(0,0,100,100)),(0,0,150,150))
         with patch('myrecorder.display.native_monitors',return_value=[NativeMonitor('EXAMPLE_DISPLAY',(0,0,1920,1080))]),patch('myrecorder.display.dpi_awareness',return_value=1):
             with self.assertRaises(DisplayError): physical_region(screen,rect(0,0,100,100))
 

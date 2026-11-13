@@ -1,2 +1,2 @@
-from .gui import main
-main()
+from .dpi_bootstrap import launch
+launch()

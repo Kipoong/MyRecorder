@@ -12,7 +12,8 @@ from PySide6.QtWidgets import (QApplication, QWidget, QMainWindow, QPushButton, 
 from .recorder import Options, Recorder
 from .audio import Diagnostics, device_choices
 from .titles import TitleError, foreground_window, list_windows, window_title, ocr_title
-from .display import DisplayError, physical_region, capture_png
+from .display import DisplayError, physical_region, capture_png, screen_snapshot
+from .coordinate_log import new_coordinate_log
 from .maintenance import saved_sessions, cleanup_sessions
 from .overlay import RegionOverlay
 from .settings import SettingsStore, StoragePaths, StorageError, prepare_storage, LABELS
@@ -57,9 +58,11 @@ class RegionPicker(QWidget):
         self.origin = event.position().toPoint()
     def mouseMoveEvent(self, event):
         if self.origin is not None:
-            self.rect = QRect(self.origin, event.position().toPoint()).normalized()
+            self.rect = QRect(self.origin, event.position().toPoint()).normalized().intersected(self.rectified_screen())
             self.update()
     def mouseReleaseEvent(self, event):
+        if self.origin is None:return
+        self.rect=QRect(self.origin,event.position().toPoint()).normalized().intersected(self.rectified_screen())
         if self.rect.width() >= 32 and self.rect.height() >= 32:
             self.accepted = True
             self.selected.emit(self.rect.translated(self.geometry().topLeft()))
@@ -120,7 +123,7 @@ class StorageDialog(QDialog):
 class Window(QMainWindow):
     def __init__(self, store=None, check_startup=True):
         super().__init__()
-        self.setWindowTitle('MyRecorder V0.4.1 — Windows 11')
+        self.setWindowTitle('MyRecorder V0.4.2 — Windows 11')
         self.settings = store or SettingsStore()
         self.paths = self.settings.load()
         self.recorder = None
@@ -136,6 +139,10 @@ class Window(QMainWindow):
         self.capture_pending = False
         self.picker_pending = False
         self.title_source = 'default'
+        self.coordinate_log = None
+        self.coordinate_log_folder = None
+        self.coordinate_log_error = None
+        self._last_coordinate_preview = 0.0
 
         self._recording_transition = False
         self._last_overlay_policy = None
@@ -179,11 +186,13 @@ class Window(QMainWindow):
         self.browse.clicked.connect(self.choose_folder)
         self.screen = QComboBox()
         for i, screen in enumerate(QApplication.screens()):
-            self.screen.addItem(f'모니터 {i+1} ({screen.geometry().width()}×{screen.geometry().height()})')
+            self.screen.addItem(f'화면 {i+1}: {screen.name()} ({screen.geometry().width()}×{screen.geometry().height()})',screen)
         self.full = QPushButton('선택 모니터 전체')
         self.pick = QPushButton('영역 드래그 선택')
         self.full.clicked.connect(self.fullscreen)
         self.pick.clicked.connect(self.select_region)
+        self.display_diagnose = QPushButton('화면 좌표 진단')
+        self.display_diagnose.clicked.connect(self.diagnose_display)
         self.region_label = QLabel()
         self.region_label.setWordWrap(True)
         self.border_toggle=QCheckBox('녹화 영역 테두리 표시')
@@ -224,7 +233,7 @@ class Window(QMainWindow):
         rows = [(QLabel('강의 제목'), self.title, self.title_button),
                 (self.title_mode, self.lecture_window, self.window_refresh),
                 (self.ocr_pick, self.ocr_language, self.ocr_engine), (self.title_hint,), (QLabel('저장 경로'), self.folder, self.browse),
-                (self.screen, self.full, self.pick), (self.region_label,),
+                (self.screen, self.full, self.pick), (self.region_label, self.display_diagnose),
                 (self.border_toggle,QLabel('대기 중: 테두리 이동 / 모서리 크기 조절'),self.border_hint),
                 (self.system, self.mic, self.cursor),
                 (QLabel('시스템 출력 장치'), self.output_device, self.refresh_devices_button), (self.audio_hint,), (QLabel('FPS'), self.fps, self.quality),
@@ -233,7 +242,7 @@ class Window(QMainWindow):
             for c, widget in enumerate(widgets):
                 grid.addWidget(widget, r, c, 1, 3 if len(widgets)==1 else 1)
         self.controls = [self.title, self.folder, self.browse, self.screen, self.full, self.pick, self.system, self.mic, self.cursor, self.fps, self.quality, self.output_device, self.refresh_devices_button,
-                         self.title_button, self.title_mode, self.lecture_window, self.window_refresh,
+                         self.display_diagnose, self.title_button, self.title_mode, self.lecture_window, self.window_refresh,
                          self.ocr_pick, self.ocr_language, self.ocr_engine, self.cleanup_button]
         for key, fn in [('Ctrl+Shift+R', self.start), ('Ctrl+Shift+P', self.pause), ('Ctrl+Shift+S', self.stop)]:
             shortcut = QShortcut(QKeySequence(key), self)
@@ -385,18 +394,59 @@ class Window(QMainWindow):
         self.picker.show()
 
     def current_screen(self):
-        return QApplication.screens()[self.screen.currentIndex()]
+        screen=self.screen.currentData()
+        if screen not in QApplication.screens():
+            raise DisplayError('화면 연결이 변경되었습니다. 앱을 재시작하세요.','SELECTED_SCREEN_REMOVED')
+        return screen
     def fullscreen(self):
         self.set_region(self.current_screen().geometry())
     def set_region(self, rect, screen=None):
         if self.state!='idle' or self._recording_transition:return
         self.region = QRect(rect)
         self.region_screen = screen or self.current_screen()
+        self.selected_screen_identity = screen_snapshot(self.region_screen)
         self.sync_overlay()
     def overlay_region_changed(self, rect):
         if self.state!='idle' or self.job or self.capture_pending or self.picker_pending or self._recording_transition:
             return
         self.set_region(rect,self.region_screen)
+
+    def coordinate_log_location(self):
+        if self.coordinate_log and not self.coordinate_log_error:return f'진단 로그: {self.coordinate_log.path}'
+        return '진단 로그 저장 실패: '+str(self.coordinate_log_error or 'Temp 경로를 확인하세요.')
+
+    def coordinate_event(self, event, **fields):
+        try:
+            if self.coordinate_log is None or self.coordinate_log_folder!=self.paths.temp:
+                self.coordinate_log=new_coordinate_log(self.paths,self.settings.root)
+                self.coordinate_log_folder=self.paths.temp
+            self.coordinate_log.write(event,**fields)
+            self.coordinate_log_error=self.coordinate_log.error
+        except Exception as exc:self.coordinate_log_error=str(exc)
+
+    def map_selected(self, operation):
+        if self.region_screen not in QApplication.screens():
+            self.coordinate_event('display_mapping_failed',operation=operation,failed_condition='SELECTED_SCREEN_REMOVED')
+            raise DisplayError('선택한 화면 연결이 변경되었습니다. 다시 선택하세요.','SELECTED_SCREEN_REMOVED')
+        current=screen_snapshot(self.region_screen)
+        selected=getattr(self,'selected_screen_identity',current)
+        if current!=selected:
+            self.coordinate_event('display_mapping_failed',operation=operation,failed_condition='SCREEN_LAYOUT_CHANGED',
+                selection_screen=selected,current_screen=current)
+            raise DisplayError('선택 후 화면 좌표 또는 배율이 변경되었습니다. 영역을 다시 선택하세요.','SCREEN_LAYOUT_CHANGED')
+        now=time.monotonic()
+        log=operation!='preview' or now-self._last_coordinate_preview>=1
+        if log:self._last_coordinate_preview=now
+        return physical_region(self.region_screen,self.region,qt_screens=QApplication.screens(),
+            diagnostics=self.coordinate_event if log else None,operation=operation)
+
+    def diagnose_display(self):
+        if self.state!='idle' or self.job:return
+        try:
+            rect=self.map_selected('manual_diagnosis')
+            message=f'선택 영역의 물리 좌표: {rect}\n'+self.coordinate_log_location()
+        except DisplayError as exc:message=str(exc)+'\n'+self.coordinate_log_location()
+        QMessageBox.information(self,'화면 좌표 진단',message)
 
     def sync_overlay(self, *unused):
         if not hasattr(self,'border_toggle'):return
@@ -405,8 +455,9 @@ class Window(QMainWindow):
             self.border_hint.setText('모니터가 변경되었습니다. 영역을 다시 선택하세요.')
             return
         physical=None
-        try:physical=physical_region(self.region_screen,self.region)
-        except Exception:pass  # optional preview must not break the capture controls
+        try:physical=self.map_selected('preview')
+        except DisplayError as exc:
+            self.status.setText('화면 좌표 확인 필요: '+str(exc))
         live=getattr(self.recorder,'process',None) is not None
         phase='paused' if self.state=='saving' else 'recording' if self.state=='recording' or self._recording_transition or live else 'paused' if self.state=='paused' else 'idle'
         editable=self.state=='idle' and not self.job and not self.capture_pending and not self.picker_pending and not self._recording_transition
@@ -510,9 +561,9 @@ class Window(QMainWindow):
         try:
             if self.region_screen not in QApplication.screens():
                 raise DisplayError('녹화 모니터가 변경되었습니다. 다시 선택하세요.')
-            physical = physical_region(self.region_screen,self.region)
+            physical = self.map_selected('recording_start')
         except DisplayError as exc:
-            QMessageBox.warning(self,'화면 좌표 / DPI 확인',str(exc))
+            QMessageBox.warning(self,'화면 좌표 / DPI 확인',str(exc)+'\n'+self.coordinate_log_location())
             return
         opts = Options(folder=Path(self.paths.recordings), title=self.title.text(),
             rect=physical, temp_folder=Path(self.paths.temp),
@@ -620,8 +671,9 @@ class Window(QMainWindow):
 def main():
     if os.name != 'nt':
         raise SystemExit('MyRecorder GUI는 Windows 11/10 전용입니다.')
-    # Qt 6 selects per-monitor DPI awareness itself. Do not mix the legacy
-    # SetProcessDPIAware call with Qt's SetProcessDpiAwarenessContext setup.
+    from .dpi_bootstrap import prepare_dpi
+    state=prepare_dpi()
+    if state.get('error'):raise SystemExit(str(state))
     app = QApplication(sys.argv)
     try:
         window = Window()

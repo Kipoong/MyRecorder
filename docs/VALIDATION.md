@@ -9,7 +9,9 @@
 | V0.4 OCR 도구 시험 | Linux/Tesseract 5.5.0 | 합성 영어 제목 실제 인식 통과 | 메모리 PNG → stdin → OCR stdout. Windows 화면 캡처·한국어 인식은 아님 |
 | V0.4 새 기능 실기 | Windows 11 | **검증 대기** | 창 제목·한국어 OCR·100/125/150% 좌표·일시정지 싱크·장시간·정리 UI·EXE |
 | V0.4.1 개발 검사 | Linux | 자동 테스트 88개·기존/신규 Qt smoke 통과 | 영역 편집·색상 렌더링·상태·모의 제외 API/실패 숨김. 네이티브 입력/제외 아님 |
-| V0.4.1 실기 | Windows 11 | **검증 대기** | 상시 테두리·DPI·실제 입력 통과·gdigrab 영상 제외·기본 녹화 회귀 |
+| V0.4.1 사용자 보고 | Windows 11 듀얼 100% | **녹화 시작 실패** | 영역 선택·초록 테두리·이동은 성공, Qt/Windows 모니터 대응 오류. 앞선 단일 모니터 조건 정정 |
+| V0.4.2 개발 검사 | Linux | 자동 테스트 105개·Qt smoke 통과 | 합성 듀얼 목록 역순·음수 원점·100/125/150%·DPI 초기화 모의·시작 차단·로그 검사 |
+| V0.4.2 실기 | Windows 11 | **검증 대기** | 네이티브 모니터 조회·DPI 경고·듀얼 전체/부분·혼합 배율·오디오/MP4 회귀 |
 
 사용자 실기 결과는 사용자가 확인한 항목만 기록합니다. V0.3 기본 기능 통과를 다른 장치,
 긴 녹화, 모든 배율, 마이크 동시 녹음 또는 V0.4 신규 기능까지 확대 해석하지 않습니다.
@@ -34,3 +36,6 @@ Fontconfig 캐시/offscreen 창 표시 관련 경고가 있었지만 검사는 �
 
 V0.4.1 점검 결과와 제한은 [REGION_OVERLAY_V0.4.1.md](REGION_OVERLAY_V0.4.1.md)를 참고하세요.
 Qt offscreen의 마스크·마우스 캡처·창 올리기 미지원 경고가 있어 네이티브 동작 통과로 취급하지 않습니다.
+
+V0.4.2 추가 실행: `PYTHONPATH=. QT_QPA_PLATFORM=offscreen python tests/display_smoke.py`와
+기존 GUI/overlay/OCR smoke. 새 검사와 실기표: [DISPLAY_V0.4.2.md](DISPLAY_V0.4.2.md).

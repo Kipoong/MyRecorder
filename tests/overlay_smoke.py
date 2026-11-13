@@ -42,7 +42,7 @@ with tempfile.TemporaryDirectory(prefix='overlay-example-') as d:
     store=SettingsStore(development)
     paths=StoragePaths(*(str(root/key) for key in ('Recordings','Converted','Temp')))
     store.save(paths)
-    with patch('myrecorder.gui.physical_region',side_effect=lambda screen,r:(r.x(),r.y(),r.width(),r.height())):
+    with patch('myrecorder.gui.physical_region',side_effect=lambda screen,r,**kwargs:(r.x(),r.y(),r.width(),r.height())):
         window=Window(store,check_startup=False)
         window.border._protect=lambda hwnd:ExclusionStatus(True,'synthetic affinity result; not Windows')
         window.set_region(QRect(100,150,200,150))
