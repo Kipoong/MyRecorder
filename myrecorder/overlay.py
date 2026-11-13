@@ -103,6 +103,8 @@ class RegionOverlay(QWidget):
                  's':QPoint(r.center().x(),r.bottom()),'sw':r.bottomLeft(),'w':QPoint(r.left(),r.center().y())}
         self._handles={key:QRect(point.x()-handle//2,point.y()-handle//2,handle,handle).intersected(b)
                        for key,point in centers.items()} if self.editable else {}
+        if hasattr(self,'allowed_handles'):
+            self._handles={key:rect for key,rect in self._handles.items() if key in self.allowed_handles}
         geometry=r.adjusted(-handle,-height-4,handle,handle).united(self._label).intersected(b)
         self.setGeometry(geometry)
         mask=QRegion()

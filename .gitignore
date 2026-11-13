@@ -42,3 +42,8 @@ audio-test-*/
 bin/tesseract/
 *.dll
 *.traineddata
+
+# Local recording mode preference
+preferences.json
+.preferences-*.tmp
+*-pts.json

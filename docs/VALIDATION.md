@@ -46,3 +46,10 @@ Linux 자동 테스트 113개 통과, 기존 GUI/overlay/display/OCR 및 신규 
 합성 미디어 세 번 저장/디코딩과 이전 파일 해시 보존을 확인했습니다.
 실제 Windows 연속 녹화/듀얼 모니터 드래그/드라이버 종료/영상 제외/싱크는 미검증입니다.
 [검증 범위 및 재검증표](CONTINUOUS_V0.4.3.md).
+
+## V0.5.0
+
+Linux unittest 127개와 GUI/overlay/display/continuous/modes_desktop/OCR smoke 통과.
+합성 6구간(5회 정지 모델) MP4 결합, PTS/DTS 및 경계 시험음을 검사했습니다.
+Windows 실제 모드 사용/다중 화면 캡처/혼합 DPI/싱크/영상 제외/복구/EXE는 미검증입니다.
+[시험 범위와 Windows 절차](MODES_DESKTOP_V0.5.md).

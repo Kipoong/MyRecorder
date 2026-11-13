@@ -124,6 +124,9 @@ def mux_segment(folder: Path, index: int, tracks: list[dict]) -> Path:
     args += ['-c:v', 'copy', '-movflags', '+faststart', str(out)]
     run(args)
     probe(out)
+    from .timestamps import packet_audit
+    audit=packet_audit(out)
+    (folder/f'{index:04d}-pts.json').write_text(json.dumps(audit,ensure_ascii=False,indent=2),encoding='utf-8')
     return out
 
 
@@ -140,7 +143,7 @@ def assemble(folder: Path, destination: Path, title: str) -> Path:
         raise RuntimeError('저장할 녹화 구간이 없습니다.')
     # ASCII relative filenames avoid FFmpeg concat quoting problems in Korean paths.
     listing = folder / 'concat.txt'
-    listing.write_text(''.join(f"file '{p.name}'\n" for p in ready), encoding='utf-8')
+    listing.write_text(''.join(f"file '{p.name}'\nduration {media_timing(p)['video_duration']:.9f}\n" for p in ready), encoding='utf-8')
     temp = folder / f'.myrecorder-{uuid.uuid4().hex}.mp4'
     try:
         run([binary('ffmpeg'), '-y', '-f', 'concat', '-safe', '0', '-i', str(listing), '-c', 'copy', '-movflags', '+faststart', str(temp)])

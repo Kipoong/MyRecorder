@@ -25,12 +25,15 @@ class Options:
     mic: bool = False
     system_device: dict | None = None
     title_source: str = 'manual'
+    recording_mode: str = 'lecture'
 
 
 class Recorder:
     def __init__(self, options: Options):
         if os.name != 'nt':
             raise RuntimeError('실제 화면 녹화는 Windows 10/11에서 지원됩니다.')
+        from .modes import RecordingPolicy
+        RecordingPolicy(options.recording_mode)
         self.options = options
         binary('ffprobe')
         directories = prepare_storage(StoragePaths(str(options.folder), str(options.converted_folder), str(options.temp_folder)))
@@ -40,7 +43,8 @@ class Recorder:
         self.diagnostics = Diagnostics(self.folder / 'audio-diagnostics.jsonl')
         self.events = Diagnostics(self.folder / 'recording-events.jsonl')
         self.manifest = {'version': 3, 'owner': 'MyRecorder', 'status': 'created',
-                         'title': options.title, 'title_source': options.title_source,
+                         'title': options.title, 'title_source': options.title_source,'recording_mode':options.recording_mode,
+                         'playback_detection':'manual_only',
                          'recordings_folder': str(options.folder),
                          'converted_folder': str(directories['converted']),
                          'temp_folder': str(directories['temp']), 'segments': [], 'warnings': []}
@@ -218,6 +222,18 @@ class Recorder:
                 raise RuntimeError('녹화 자원 정리를 확인하지 못하여 저장을 중단했습니다.')
             result = assemble(self.folder, self.options.folder, self.options.title)
             timing = media_timing(result)
+            from .timestamps import packet_audit
+            try:
+                audit=packet_audit(result)
+                self.manifest['timestamp_audit']=audit
+                for segment in self.manifest['segments']:
+                    audit_file=self.folder/f"{segment['index']:04d}-pts.json"
+                    if audit_file.is_file():
+                        segment['timestamp_audit']=json.loads(audit_file.read_text(encoding='utf-8'))
+                        self.manifest['warnings'].extend(f"구간 {segment['index']}: {warning}" for warning in segment['timestamp_audit']['warnings'])
+                self.manifest['warnings'].extend(audit['warnings'])
+            except Exception as audit_error:
+                self.manifest['warnings'].append('PTS 검증 실패: '+str(audit_error))
             durations=[segment.get('duration') for segment in self.manifest['segments'] if segment.get('usable')]
             if durations and all(value is not None for value in durations):
                 timing['segment_duration_sum']=sum(durations)

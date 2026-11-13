@@ -11,6 +11,10 @@ from PySide6.QtWidgets import (QApplication, QWidget, QMainWindow, QPushButton, 
     QLineEdit, QComboBox, QCheckBox, QFileDialog, QMessageBox, QGridLayout, QDialog, QDialogButtonBox, QScrollArea)
 from .recorder import Options, Recorder
 from .media import binary
+from .modes import RecordingPolicy, MODES
+from .preferences import PreferencesStore
+from .desktop import layout as desktop_layout, validate_rect
+from .desktop_ui import DesktopDialog, DesktopOverlay
 from .audio import Diagnostics, device_choices
 from .titles import TitleError, foreground_window, list_windows, window_title, ocr_title
 from .display import DisplayError, physical_region, capture_png, screen_snapshot
@@ -124,9 +128,14 @@ class StorageDialog(QDialog):
 class Window(QMainWindow):
     def __init__(self, store=None, check_startup=True):
         super().__init__()
-        self.setWindowTitle('MyRecorder V0.4.3 — Windows 11')
+        self.setWindowTitle('MyRecorder V0.5.0 — Windows 11')
         self.settings = store or SettingsStore()
         self.paths = self.settings.load()
+        self.preferences=PreferencesStore(self.settings.root)
+        self.policy=self.preferences.load()
+        self.desktop_mode=False
+        self.desktop_entries=[]
+        self.desktop_signature=None
         self.recorder = None
         self.state = 'idle'
         self.job = None
@@ -156,6 +165,8 @@ class Window(QMainWindow):
         self.border = RegionOverlay()
         self.border.regionChanged.connect(self.overlay_region_changed)
         self.border.moveRequested.connect(self.overlay_move_requested)
+        self.desktop_border=DesktopOverlay()
+        self.desktop_border.regionChanged.connect(self.edit_desktop_region)
         self.picker = None
         root = QWidget()
         scroll = QScrollArea()
@@ -164,6 +175,11 @@ class Window(QMainWindow):
         self.setCentralWidget(scroll)
         grid = QGridLayout(root)
         self.default_title = time.strftime('강의_%Y%m%d_%H%M%S')
+        self.recording_type=QComboBox()
+        for key,label in MODES.items():self.recording_type.addItem(label,key)
+        self.recording_type.setCurrentIndex(self.recording_type.findData(self.policy.mode))
+        self.recording_type.currentIndexChanged.connect(self.change_recording_type)
+        self.mode_hint=QLabel(self.policy.instructions);self.mode_hint.setWordWrap(True)
         self.title = QLineEdit(self.default_title)
         self.title.textEdited.connect(lambda text: setattr(self, 'title_source', 'manual'))
         self.title_button = QPushButton('제목 자동 인식')
@@ -201,6 +217,10 @@ class Window(QMainWindow):
         self.pick.clicked.connect(self.select_region)
         self.display_diagnose = QPushButton('화면 좌표 진단')
         self.display_diagnose.clicked.connect(self.diagnose_display)
+        self.desktop_pick=QPushButton('두 화면에 걸친 영역')
+        self.desktop_pick.clicked.connect(self.select_desktop_region)
+        self.desktop_full=QPushButton('전체 가상 데스크톱')
+        self.desktop_full.clicked.connect(self.full_desktop)
         self.region_label = QLabel()
         self.region_label.setWordWrap(True)
         self.border_toggle=QCheckBox('녹화 영역 테두리 표시')
@@ -238,10 +258,10 @@ class Window(QMainWindow):
         self.clock.setStyleSheet('font-size: 28px; font-weight: bold;')
         self.status = QLabel('대기 — 제목과 녹화 영역을 확인하세요.')
         self.status.setWordWrap(True)
-        rows = [(QLabel('강의 제목'), self.title, self.title_button),
+        rows = [(QLabel('녹화 유형'),self.recording_type), (self.mode_hint,), (QLabel('강의 제목'), self.title, self.title_button),
                 (self.title_mode, self.lecture_window, self.window_refresh),
                 (self.ocr_pick, self.ocr_language, self.ocr_engine), (self.title_hint,), (QLabel('저장 경로'), self.folder, self.browse),
-                (self.screen, self.full, self.pick), (self.region_label, self.display_diagnose),
+                (self.screen, self.full, self.pick), (self.desktop_pick,self.desktop_full), (self.region_label, self.display_diagnose),
                 (self.border_toggle,QLabel('대기 중: 테두리 이동 / 모서리 크기 조절'),self.border_hint),
                 (self.system, self.mic, self.cursor),
                 (QLabel('시스템 출력 장치'), self.output_device, self.refresh_devices_button), (self.audio_hint,), (QLabel('FPS'), self.fps, self.quality),
@@ -249,7 +269,7 @@ class Window(QMainWindow):
         for r, widgets in enumerate(rows):
             for c, widget in enumerate(widgets):
                 grid.addWidget(widget, r, c, 1, 3 if len(widgets)==1 else 1)
-        self.controls = [self.title, self.folder, self.browse, self.screen, self.full, self.pick, self.system, self.mic, self.cursor, self.fps, self.quality, self.output_device, self.refresh_devices_button,
+        self.controls = [self.recording_type,self.desktop_pick,self.desktop_full,self.title, self.folder, self.browse, self.screen, self.full, self.pick, self.system, self.mic, self.cursor, self.fps, self.quality, self.output_device, self.refresh_devices_button,
                          self.display_diagnose, self.title_button, self.title_mode, self.lecture_window, self.window_refresh,
                          self.ocr_pick, self.ocr_language, self.ocr_engine, self.cleanup_button]
         for key, fn in [('Ctrl+Shift+R', self.start), ('Ctrl+Shift+P', self.pause), ('Ctrl+Shift+S', self.stop)]:
@@ -401,6 +421,59 @@ class Window(QMainWindow):
         self.picker.cancelled.connect(cancelled)
         self.picker.show()
 
+    def change_recording_type(self):
+        requested=self.recording_type.currentData()
+        if self.state!='idle' or self.job or self._recording_transition:
+            self.recording_type.blockSignals(True)
+            self.recording_type.setCurrentIndex(self.recording_type.findData(self.policy.mode))
+            self.recording_type.blockSignals(False);return
+        try:
+            policy=RecordingPolicy(requested);self.preferences.save(policy)
+        except (ValueError,StorageError) as exc:
+            QMessageBox.warning(self,'녹화 유형 설정',str(exc))
+            self.recording_type.blockSignals(True);self.recording_type.setCurrentIndex(self.recording_type.findData(self.policy.mode));self.recording_type.blockSignals(False);return
+        self.policy=policy;self.mode_hint.setText(policy.instructions)
+
+    def active_border(self):return self.desktop_border if self.desktop_mode else self.border
+
+    def set_desktop_region(self,physical,entries,bounds,signature):
+        if self.state!='idle' or self.job or self._recording_transition:return
+        physical=validate_rect(tuple(physical),bounds,[m for s,m in entries])
+        self.desktop_mode=True;self.region=QRect(*physical)
+        self.desktop_entries=entries;self.desktop_bounds=bounds;self.desktop_signature=signature
+        self.refresh()
+
+    def full_desktop(self):
+        if self.state!='idle' or self.job:return
+        try:
+            entries,bounds,signature=desktop_layout(QApplication.screens(),self.coordinate_event,'full_desktop')
+            self.set_desktop_region(bounds,entries,bounds,signature)
+        except DisplayError as exc:QMessageBox.warning(self,'가상 데스크톱',str(exc)+'\n'+self.coordinate_log_location())
+
+    def select_desktop_region(self):
+        if self.state!='idle' or self.job:return
+        try:
+            entries,bounds,signature=desktop_layout(QApplication.screens(),self.coordinate_event,'desktop_picker')
+            self.picker_pending=True;self.refresh()
+            try:
+                dialog=DesktopDialog(entries,bounds,tuple((self.region.x(),self.region.y(),self.region.width(),self.region.height())) if self.desktop_mode else None,self)
+                accepted=dialog.exec()==QDialog.Accepted
+            finally:self.picker_pending=False;self.refresh()
+            if accepted:self.set_desktop_region(dialog.selected,entries,bounds,signature)
+        except DisplayError as exc:QMessageBox.warning(self,'가상 데스크톱',str(exc)+'\n'+self.coordinate_log_location())
+
+    def edit_desktop_region(self,physical):
+        if self.state!='idle' or self.job or self._recording_transition:return
+        x,y,w,h=physical;bx,by,bw,bh=self.desktop_bounds
+        if w<32 or h<32:return
+        physical=(max(bx,min(x,bx+bw-w)),max(by,min(y,by+bh-h)),w,h)
+        try:
+            # Keep original layout identity; do not silently adopt a changed monitor.
+            self.map_selected('desktop_edit')
+            validate_rect(physical,self.desktop_bounds,[m for s,m in self.desktop_entries])
+            self.region=QRect(*physical);self.refresh()
+        except DisplayError as exc:self.status.setText(str(exc))
+
     def current_screen(self):
         screen=self.screen.currentData()
         if screen not in QApplication.screens():
@@ -410,6 +483,8 @@ class Window(QMainWindow):
         self.set_region(self.current_screen().geometry())
     def set_region(self, rect, screen=None):
         if self.state!='idle' or self._recording_transition:return
+        self.desktop_mode=False
+        self.desktop_border.hide()
         self.region = QRect(rect)
         self.region_screen = screen or self.current_screen()
         self.selected_screen_identity = screen_snapshot(self.region_screen)
@@ -451,6 +526,20 @@ class Window(QMainWindow):
         except Exception as exc:self.coordinate_log_error=str(exc)
 
     def map_selected(self, operation):
+        if self.desktop_mode:
+            now=time.monotonic();log=operation!='preview' or now-self._last_coordinate_preview>=1
+            if log:self._last_coordinate_preview=now
+            entries,bounds,signature=desktop_layout(QApplication.screens(),self.coordinate_event if log else None,operation)
+            if signature!=self.desktop_signature:
+                self.coordinate_event('desktop_mapping_failed',operation=operation,failed_condition='SCREEN_LAYOUT_CHANGED')
+                raise DisplayError('선택 후 화면 구성이 바뀌었습니다. 데스크톱 영역을 다시 선택하세요.','SCREEN_LAYOUT_CHANGED')
+            try:result=validate_rect((self.region.x(),self.region.y(),self.region.width(),self.region.height()),bounds,[m for s,m in entries])
+            except DisplayError as exc:
+                self.coordinate_event('desktop_mapping_failed',operation=operation,failed_condition=exc.code,selected_region=(self.region.x(),self.region.y(),self.region.width(),self.region.height()))
+                raise
+            self.desktop_entries=entries
+            if log:self.coordinate_event('desktop_mapping_ok',operation=operation,physical_region=result)
+            return result
         if self.region_screen not in QApplication.screens():
             self.coordinate_event('display_mapping_failed',operation=operation,failed_condition='SELECTED_SCREEN_REMOVED')
             raise DisplayError('선택한 화면 연결이 변경되었습니다. 다시 선택하세요.','SELECTED_SCREEN_REMOVED')
@@ -476,7 +565,7 @@ class Window(QMainWindow):
 
     def sync_overlay(self, *unused):
         if not hasattr(self,'border_toggle'):return
-        if self.region_screen not in QApplication.screens():
+        if not self.desktop_mode and self.region_screen not in QApplication.screens():
             self.region_valid=False
             self.border.hide()
             self.border_hint.setText('모니터가 변경되었습니다. 영역을 다시 선택하세요.')
@@ -489,6 +578,15 @@ class Window(QMainWindow):
         live=getattr(self.recorder,'process',None) is not None
         phase='saving' if self.state=='saving' else 'save_failed' if self.state=='save_failed' else 'recording' if self.state=='recording' or self._recording_transition or live else 'paused' if self.state=='paused' else 'idle'
         editable=self.state=='idle' and not self.job and not self.capture_pending and not self.picker_pending and not self._recording_transition
+        if self.desktop_mode:
+            self.border.hide()
+            if physical is not None:
+                self.desktop_border.configure(physical,self.desktop_entries,phase,self.border_toggle.isChecked(),editable,
+                    self.capture_pending or self.picker_pending,self._recording_transition or self.state=='recording' or live)
+            else:self.desktop_border.hide()
+            self.region_label.setText(f'가상 데스크톱 물리 영역: {physical or "확인 필요"}')
+            self.update_overlay_feedback();return
+        self.desktop_border.hide()
         self.border.configure(self.region,self.region_screen.geometry(),physical,phase,
             visible=self.border_toggle.isChecked(),editable=editable,
             suspended=self.capture_pending or self.picker_pending,
@@ -500,14 +598,16 @@ class Window(QMainWindow):
         self.update_overlay_feedback()
 
     def update_overlay_feedback(self):
-        if self.region_screen not in QApplication.screens():
+        if self.desktop_mode:self.desktop_border.refresh_exclusion()
+        border=self.active_border()
+        if not self.desktop_mode and self.region_screen not in QApplication.screens():
             self.region_valid=False
-            self.border.hide()
+            border.hide()
             self.border_hint.setText('모니터가 변경되었습니다. 영역을 다시 선택하세요.')
             return
         if not self.border_toggle.isChecked():self.border_hint.setText('테두리 숨김')
         elif self.capture_pending or self.picker_pending:self.border_hint.setText('영역 선택/OCR 중 일시 숨김')
-        elif not self.border.exclusion.applied:
+        elif not border.exclusion.applied:
             self.border_hint.setText('영상 제외 미확인 — 녹화 중 테두리 자동 숨김')
         else:self.border_hint.setText('영상 제외 속성 적용 · 녹화/일시정지 중 영역 고정')
         policy=self.overlay_policy()
@@ -517,10 +617,11 @@ class Window(QMainWindow):
             self._last_overlay_policy=policy
 
     def overlay_policy(self):
-        return {'phase':self.border.phase,'capture_active':self.border.capture_active,
-                'physical_rect':self.border.physical,'requested_visible':self.border_toggle.isChecked(),'visible':self.border.isVisible(),
-                'exclusion_applied':self.border.exclusion.applied,'reason':self.border.exclusion.reason,
-                'error_code':self.border.exclusion.error_code}
+        border=self.active_border()
+        return {'phase':border.phase,'capture_active':border.capture_active,
+                'physical_rect':border.physical,'requested_visible':self.border_toggle.isChecked(),'visible':border.isVisible(),
+                'exclusion_applied':border.exclusion.applied,'reason':border.exclusion.reason,
+                'error_code':border.exclusion.error_code}
 
     def select_region(self):
         screen=self.current_screen()
@@ -590,7 +691,7 @@ class Window(QMainWindow):
         self.job.start()
         self.refresh()
     def start(self):
-        if self.state != 'idle' or self.job or self.capture_pending or self.picker_pending:
+        if not self.policy.permits('start',self.state) or self.job or self.capture_pending or self.picker_pending:
             return
         if self.recorder is not None:return
         if self.engine_error:
@@ -598,7 +699,7 @@ class Window(QMainWindow):
         if not self.check_storage():
             return
         try:
-            if self.region_screen not in QApplication.screens():
+            if not self.desktop_mode and self.region_screen not in QApplication.screens():
                 raise DisplayError('녹화 모니터가 변경되었습니다. 다시 선택하세요.')
             physical = self.map_selected('recording_start')
         except DisplayError as exc:
@@ -609,7 +710,7 @@ class Window(QMainWindow):
             converted_folder=Path(self.paths.converted), fps=int(self.fps.currentText()),
             crf=[18, 23, 28][self.quality.currentIndex()], cursor=self.cursor.isChecked(),
             system=self.system.isChecked(), mic=self.mic.isChecked(),
-            system_device=self.output_device.currentData(), title_source=self.title_source)
+            system_device=self.output_device.currentData(), title_source=self.title_source,recording_mode=self.policy.mode)
         def work():
             self.recorder = Recorder(opts)
             events=getattr(self.recorder,'events',None)
@@ -627,7 +728,7 @@ class Window(QMainWindow):
         self.sync_overlay()
         self.status.setText('녹화 중 — ' + self.recorder.audio_status())
     def pause(self):
-        if self.job or self.state not in ('recording', 'paused'):
+        if self.job or not self.policy.permits('resume' if self.state=='paused' else 'pause',self.state):
             return
         if self.state == 'paused':
             self._recording_transition=True
@@ -642,7 +743,7 @@ class Window(QMainWindow):
                 self.status.setText('일시정지 — 구간 파일 보존됨')
             self.submit(self.recorder.pause, finished)
     def stop(self):
-        if self.job or self.state not in ('recording', 'paused','save_failed'):
+        if self.job or not self.policy.permits('stop',self.state):
             return
         self.state='saving'
         self.sync_overlay()
@@ -712,6 +813,7 @@ class Window(QMainWindow):
             self.recorder.events.write('closed_without_final_mp4')
         if self.picker is not None: self.picker.close()
         self.border.close()
+        self.desktop_border.close()
         event.accept()
 
 
