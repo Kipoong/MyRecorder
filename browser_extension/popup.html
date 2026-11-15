@@ -1,7 +1,8 @@
 <!doctype html><html lang="ko"><meta charset="utf-8"><title>MyRecorder 연동</title>
 <style>body{font:13px sans-serif;width:380px;max-height:570px;overflow-y:auto;margin:0;padding:10px;box-sizing:border-box}h3{font-size:16px;margin:0 0 7px}textarea{box-sizing:border-box;width:100%;height:52px}button{margin:5px 3px 0 0;padding:6px}p{margin:6px 0;line-height:1.35;overflow-wrap:anywhere}label{display:block;margin-top:4px}input[type=file]{max-width:100%;font-size:12px}#credential-status,#status{background:#f1f5fa;padding:6px}select{margin-top:3px}</style>
-<h3>MyRecorder 강의 연동 V0.6.3</h3><p>확장 ID: <b id="id"></b></p>
+<h3>MyRecorder 강의 연동 V0.6.4</h3><p>확장 ID: <b id="id"></b></p>
 <p>① 앱 JSON을 입력하고 저장·확인을 완료한 뒤 ② 강의 탭을 연결하세요. 단계를 나누어 오류를 확인합니다.</p>
+<p id="worker-status">백그라운드 응답 확인 중…</p>
 <textarea id="pairing" autocomplete="off" spellcheck="false" placeholder='{"port": ..., "token": "..."}'></textarea>
 <label>JSON 파일 불러오기 <input id="pairing-file" type="file" accept=".json,application/json"></label>
 <button id="save-pairing">① 앱 연결 저장·확인</button>
@@ -12,4 +13,5 @@
 <p id="status">HTML5 video가 있는 최상위 문서만 지원합니다. 보호된 콘텐츠와 iframe 플레이어는 미지원입니다.</p>
 <script src="pairing_input.js"></script>
 <script src="popup_tabs.js"></script>
+<script src="popup_rpc.js"></script>
 <script src="popup.js"></script></html>

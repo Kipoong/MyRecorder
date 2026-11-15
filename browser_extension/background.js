@@ -1,5 +1,7 @@
 // Persistent encrypted pairing is accessible only to trusted extension contexts.
-importScripts('vault.js');
+importScripts('vault.js','ui_sender.js');
+const UI_BUILD='0.6.4';
+const UI_COMMANDS=new Set(['ui_hello','pairing_save','pairing_status','pairing_verify','pairing_forget','site_remember']);
 let siteQueue=Promise.resolve();
 async function restoreSites() {
   const {paired_sites=[]}=await chrome.storage.local.get('paired_sites');
@@ -52,9 +54,10 @@ async function post(payload) {
   if (!await crypto.subtle.verify('HMAC',key,bytes,encode(`response\n${nonce}\n${text}`))) throw connectionError('APP_PROOF_INVALID','앱 응답 서명을 확인하지 못했습니다. 연결 포트를 확인하세요.');
   return JSON.parse(text);
 }
-chrome.runtime.onMessage.addListener((message, sender, respond) => {
-  if (sender.id===chrome.runtime.id && sender.url===chrome.runtime.getURL('popup.html') && ['pairing_save','pairing_status','pairing_verify','pairing_forget','site_remember'].includes(message?.type)) {
-    (async()=>{
+async function handleUi(message,sender) {
+  if(!UiSender.allowed(sender,chrome.runtime.id))return {ok:false,code:'UI_SENDER_REJECTED',sender_info:UiSender.info(sender,chrome.runtime.id),error:'팝업 출처를 확인하지 못했습니다. 확장 아이콘으로 팝업을 다시 여세요.'};
+  if(message.type==='ui_hello')return {ok:true,worker_build:UI_BUILD,manifest_version:chrome.runtime.getManifest().version,sender_info:UiSender.info(sender,chrome.runtime.id)};
+
       if (message.type==='pairing_save') {
         try {await PairingVault.save(message.pairing);if (!await PairingVault.verify()) throw new Error('missing readback');}
         catch {throw connectionError('STORE_WRITE_FAILED','브라우저 암호화 저장/다시 읽기 확인에 실패했습니다. 저장소 권한이나 프로필을 확인하세요.');}
@@ -76,7 +79,22 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
       }
       const stored=await PairingVault.load();
       return {ok:true,paired:!!stored,port:stored?.port};
-    })().then(respond).catch(error=>respond({ok:false,code:error.code||'STORE_READ_FAILED',error:error.code?error.message:'저장한 인증 정보 읽기에 실패했습니다. 브라우저 프로필을 확인하세요.'}));
+
+}
+function uiFailure(error){return {ok:false,code:error.code||'STORE_READ_FAILED',error:error.code?error.message:'저장한 인증 정보 읽기에 실패했습니다. 브라우저 프로필을 확인하세요.'};}
+chrome.runtime.onConnect.addListener(port=>{
+  if(port.name!=='myrecorder-ui-v1')return;
+  port.onMessage.addListener(message=>{
+    if(!message || typeof message.request_id!=='string' || !/^[A-Za-z0-9_-]{1,100}$/.test(message.request_id))return;
+    const reply=result=>{try{port.postMessage({request_id:message.request_id,type:message.type,result});}catch{}};
+    if(!UI_COMMANDS.has(message.type)){reply({ok:false,code:'UI_UNKNOWN_COMMAND',error:'지원하지 않는 UI 명령입니다.'});return;}
+    handleUi(message,port.sender).then(reply).catch(error=>reply(uiFailure(error)));
+  });
+});
+chrome.runtime.onMessage.addListener((message,sender,respond)=>{
+  if(UI_COMMANDS.has(message?.type)) {
+    // Compatibility path must also explicitly answer unauthorized UI requests.
+    handleUi(message,sender).then(respond).catch(error=>respond(uiFailure(error)));
     return true;
   }
   if (message?.type !== 'lecture_event' || sender.id !== chrome.runtime.id || !sender.tab || sender.frameId !== 0) return;

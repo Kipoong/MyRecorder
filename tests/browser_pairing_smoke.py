@@ -66,10 +66,10 @@ with tempfile.TemporaryDirectory(prefix='pairing-flow-example-') as d:
                 bridge=Bridge(extension_id,signed_only=True,token=pairing['token'],port=pairing['port']);bridge.start()
                 page.click('#save-pairing');wait(lambda:'앱 응답 정상' in page.locator('#credential-status').inner_text())
                 assert not bridge.armed and bridge.selected is None
-                page.evaluate('()=>{window.realSend=chrome.runtime.sendMessage;chrome.runtime.sendMessage=()=>new Promise(()=>{});}')
+                page.evaluate("()=>{window.realCall=rpc.call;rpc.call=()=>new Promise((_,reject)=>setTimeout(()=>reject(PairingInput.error('BACKGROUND_TIMEOUT','simulated timeout')),10000));}")
                 page.click('#save-pairing');wait(lambda:'BACKGROUND_TIMEOUT' in page.locator('#status').inner_text())
                 assert page.locator('#save-pairing').is_enabled()
-                page.evaluate('()=>{chrome.runtime.sendMessage=window.realSend;}')
+                page.evaluate('()=>{rpc.call=window.realCall;}')
                 page.click('#save-pairing');wait(lambda:'앱 응답 정상' in page.locator('#credential-status').inner_text())
                 print('Actual Chromium: unsaved-popup dismissal, explicit JSON/file save, cold readback and signed app probe: PASS')
                 print('Missing input/write failure/wrong token/app outage distinguished; credentials preserved and no capture: PASS')

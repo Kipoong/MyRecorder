@@ -15,12 +15,17 @@ function selectedLabel() {
 function showError(error,fallback='CONNECTION_FAILED') {
   status.textContent=`[${error.code||fallback}] ${error.message||'연결 단계를 확인하세요.'}`;
 }
+let rpc;
+function connectUi() {
+  const client=PopupRpc.create();rpc=client;
+  document.querySelector('#worker-status').textContent='백그라운드 UI 채널 연결 확인 중…';
+  client.ready.then(info=>{if(rpc===client)document.querySelector('#worker-status').textContent=`백그라운드 ${info.worker_build} 응답 확인 · UI 채널 정상`;}).catch(error=>{if(rpc===client)document.querySelector('#worker-status').textContent=`[${error.code}] ${error.message}`;});
+}
+connectUi();
 async function request(type,fields={}) {
-  let result,timer;
-  try {result=await Promise.race([chrome.runtime.sendMessage({type,...fields}),new Promise((_,reject)=>{timer=setTimeout(()=>reject(PairingInput.error('BACKGROUND_TIMEOUT','확장 응답이 10초 안에 오지 않았습니다. 브라우저 저장소/확장 상태를 확인하세요.')),10000);})]);}
-  catch(error) {if(error.code)throw error;throw PairingInput.error('BACKGROUND_UNAVAILABLE','확장 백그라운드에 응답이 없습니다. 확장을 새로고침하세요.');}
-  finally {clearTimeout(timer);}
-  if (!result?.ok) throw PairingInput.error(result?.code||'BACKGROUND_REPLY',result?.error||'확장 응답을 확인하지 못했습니다.');
+  if(rpc.closed)connectUi();
+  const result=await rpc.call(type,fields);
+  if(!result.ok)throw PairingInput.error(result.code||'UI_BAD_REPLY',result.error||'확장 응답이 올바르지 않습니다.');
   return result;
 }
 input.addEventListener('input',()=>{

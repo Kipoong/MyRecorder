@@ -131,7 +131,7 @@ class StorageDialog(QDialog):
 class Window(QMainWindow):
     def __init__(self, store=None, check_startup=True):
         super().__init__()
-        self.setWindowTitle('MyRecorder V0.6.3 — Windows 11')
+        self.setWindowTitle('MyRecorder V0.6.4 — Windows 11')
         self.settings = store or SettingsStore()
         self.paths = self.settings.load()
         self.preferences=PreferencesStore(self.settings.root)
