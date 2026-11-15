@@ -1,8 +1,11 @@
 <!doctype html><html lang="ko"><meta charset="utf-8"><title>MyRecorder 연동</title>
 <style>body{font:14px sans-serif;width:350px;padding:12px}textarea{width:100%;height:65px}button{margin-top:10px;padding:8px}p{overflow-wrap:anywhere}</style>
-<h3>MyRecorder 강의 연동</h3><p>확장 ID: <b id="id"></b></p>
+<h3>MyRecorder 강의 연동 V0.6.2</h3><p>확장 ID: <b id="id"></b></p>
 <p>최초 한 번만 앱에서 연결 정보를 받아 입력하세요. 이후에는 저장한 연결로 자동 재연결합니다.</p>
-<textarea id="pairing" placeholder='{"port": ..., "token": "..."}'></textarea>
-<button id="connect">현재 강의 탭 연결</button><button id="disconnect">저장한 연결 삭제</button>
+<textarea id="pairing" autocomplete="off" spellcheck="false" placeholder='{"port": ..., "token": "..."}'></textarea>
+<p id="target-info">탭 목록을 불러오는 중…</p>
+<select id="target" style="width:100%"><option value="">탭 선택</option></select>
+<button id="refresh-tabs">탭 목록 새로고침</button><button id="connect" disabled>선택한 강의 탭 연결</button><button id="disconnect">저장한 연결 삭제</button>
 <p id="status">HTML5 video가 있는 최상위 문서만 지원합니다. 보호된 콘텐츠와 iframe 플레이어는 미지원입니다.</p>
+<script src="popup_tabs.js"></script>
 <script src="popup.js"></script></html>

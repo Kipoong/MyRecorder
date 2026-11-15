@@ -66,10 +66,13 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
   if (message?.type !== 'lecture_event' || sender.id !== chrome.runtime.id || !sender.tab || sender.frameId !== 0) return;
   const event = message.event;
   if (!event || typeof event.video_id !== 'string' || !/^[A-Za-z0-9_-]{1,60}$/.test(event.video_id)) return;
+  let pageOrigin;
+  try {const url=new URL(sender.url);if (!['http:','https:'].includes(url.protocol)) throw new Error('unsupported');pageOrigin=url.origin;}
+  catch {respond({ok:false,error:'강의 페이지 주소를 확인할 수 없습니다. 페이지를 새로고침하세요.'});return false;}
   const source = {
     key: `${instance}:${sender.tab.id}:${sender.documentId || 'document'}:${event.video_id}`,
     title: String(sender.tab.title || event.title || '제목 없음').slice(0,500),
-    origin: new URL(sender.url).origin, video_label: String(event.label || 'HTML5 video').slice(0,100),
+    origin: pageOrigin, video_label: String(event.label || 'HTML5 video').slice(0,100),
     state: event.state, supported: event.supported === true, gate: String(event.gate || 'observer').slice(0,100)
   };
   const payload = {kind:event.kind, source, request_id:event.request_id,

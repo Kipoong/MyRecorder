@@ -72,3 +72,10 @@ Linux unittest 153개 및 기존/신규 Qt smoke. 실제 Chromium 암호화 저�
 재시작/사이트 감지 복원/서명 통신/삭제를 검사했습니다. Windows DPAPI는 모의 객체로만 검사했으며
 실제 Windows 계정 암호화·재부팅·Chrome/Edge 및 녹화 회귀는 미검증입니다.
 [상세 범위와 Windows 재검증](RECONNECT_V0.6.1.md).
+
+## V0.6.2
+
+탭 URL 없음 조건에서 기존 오류를 Chromium 팝업으로 재현했습니다. Linux unittest 159개와
+기존 Qt/브라우저 회귀 검사, 신규 실제 팝업 설정 경로 검사를 통과했습니다.
+Windows Chrome/Edge 권한·연결·실제 캡처는 미검증입니다.
+[원인과 적용 절차](POPUP_FIX_V0.6.2.md).
