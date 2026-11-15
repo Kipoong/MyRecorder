@@ -2,6 +2,8 @@
 from collections import deque, OrderedDict
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
+import hashlib
+import hmac
 import re
 import secrets
 import threading
@@ -10,9 +12,11 @@ import time
 KINDS={'snapshot','prepare','pause','playing','ended','buffering','unsupported','poll','disconnect','play_failed'}
 
 class Bridge:
-    def __init__(self,extension_id,clock=time.monotonic):
+    def __init__(self,extension_id,clock=time.monotonic,*,token=None,port=0,signed_only=False):
         if not re.fullmatch('[a-p]{32}',extension_id):raise ValueError('확장 ID는 a~p 영문 소문자 32자입니다.')
-        self.origin='chrome-extension://'+extension_id;self.token=secrets.token_hex(32)
+        if token is not None and not re.fullmatch('[a-f0-9]{64}',token):raise ValueError('잘못된 인증 정보입니다.')
+        if type(port) is not int or not 0<=port<=65535:raise ValueError('잘못된 포트입니다.')
+        self.origin='chrome-extension://'+extension_id;self.token=token or secrets.token_hex(32);self.port=port;self.signed_only=signed_only;self.nonces=OrderedDict()
         self.clock=clock;self.lock=threading.RLock();self.events=deque(maxlen=512)
         self.sources=OrderedDict();self.replies=OrderedDict();self.last_sequences={}
         self.selected=None;self.armed=False;self.message='수동 제어';self.server=None;self.thread=None
@@ -67,7 +71,7 @@ class Bridge:
             protocol_version='HTTP/1.1'
             def log_message(self,*args):pass  # never log tokens or raw HTTP payloads
             def setup(self):super().setup();self.connection.settimeout(3)
-            def authorized(self,preflight=False):
+            def authorized(self,preflight=False,body=None):
                 expected=f'127.0.0.1:{self.server.server_address[1]}'
                 if self.headers.get('Host')!=expected:return False
                 origin=self.headers.get('Origin')
@@ -76,12 +80,33 @@ class Bridge:
                 if not preflight and self.headers.get('X-MyRecorder-Extension')!=bridge.origin.split('://')[1]:return False
                 if self.path!='/v1/events':return False
                 if preflight:return True
-                try:return secrets.compare_digest(self.headers.get('Authorization','').encode('ascii'),('Bearer '+bridge.token).encode('ascii'))
+                authorization=self.headers.get('Authorization','')
+                if authorization.startswith('MyRecorder-HMAC '):
+                    nonce=self.headers.get('X-MyRecorder-Nonce','');stamp=self.headers.get('X-MyRecorder-Time','')
+                    if not re.fullmatch('[a-f0-9]{64}',nonce) or not re.fullmatch('[0-9]{13,16}',stamp):return False
+                    if abs(time.time()*1000-int(stamp))>30000:return False
+                    if body is None:return True
+                    canonical=f'POST\n/v1/events\n{stamp}\n{nonce}\n'.encode()+body
+                    expected=hmac.new(bridge.token.encode(),canonical,hashlib.sha256).hexdigest()
+                    if not re.fullmatch('[a-f0-9]{64}',authorization[16:]):return False
+                    if not secrets.compare_digest(authorization[16:],expected):return False
+                    with bridge.lock:
+                        if nonce in bridge.nonces:return False
+                        bridge.nonces[nonce]=True
+                        while len(bridge.nonces)>1024:bridge.nonces.popitem(last=False)
+                    return True
+                if bridge.signed_only:return False
+                try:return secrets.compare_digest(authorization.encode('ascii'),('Bearer '+bridge.token).encode('ascii'))
                 except UnicodeEncodeError:return False
             def answer(self,status,data):
                 body=json.dumps(data,ensure_ascii=False,allow_nan=False).encode()
                 self.send_response(status)
                 if self.headers.get('Origin')==bridge.origin:self.send_header('Access-Control-Allow-Origin',bridge.origin)
+                nonce=self.headers.get('X-MyRecorder-Nonce','')
+                if re.fullmatch('[a-f0-9]{64}',nonce):
+                    proof=hmac.new(bridge.token.encode(),f'response\n{nonce}\n'.encode()+body,hashlib.sha256).hexdigest()
+                    self.send_header('X-MyRecorder-Proof',proof)
+                    self.send_header('Access-Control-Expose-Headers','X-MyRecorder-Proof')
                 self.send_header('Vary','Origin');self.send_header('Cache-Control','no-store')
                 self.send_header('Content-Type','application/json; charset=utf-8');self.send_header('Content-Length',str(len(body)))
                 self.send_header('Connection','close');self.end_headers();self.wfile.write(body)
@@ -89,7 +114,7 @@ class Bridge:
                 if not self.authorized(True):return self.answer(403,{'error':'origin/host rejected'})
                 if self.headers.get('Access-Control-Request-Method')!='POST':return self.answer(403,{'error':'method rejected'})
                 self.send_response(204);self.send_header('Access-Control-Allow-Origin',bridge.origin)
-                self.send_header('Access-Control-Allow-Methods','POST');self.send_header('Access-Control-Allow-Headers','authorization,content-type,x-myrecorder-extension')
+                self.send_header('Access-Control-Allow-Methods','POST');self.send_header('Access-Control-Allow-Headers','authorization,content-type,x-myrecorder-extension,x-myrecorder-nonce,x-myrecorder-time')
                 self.send_header('Content-Length','0');self.send_header('Connection','close');self.end_headers()
             def do_POST(self):
                 if not self.authorized():return self.answer(403,{'error':'authentication/origin/host rejected'})
@@ -97,14 +122,16 @@ class Bridge:
                 try:
                     length=int(self.headers.get('Content-Length','0'))
                     if not 0<length<=16384 or self.headers.get('Transfer-Encoding'):return self.answer(413,{'error':'body rejected'})
-                    data=json.loads(self.rfile.read(length))
+                    raw=self.rfile.read(length)
+                    if not self.authorized(body=raw):return self.answer(403,{'error':'signature/replay rejected'})
+                    data=json.loads(raw)
                     self.answer(200,bridge.ingest(data))
                 except (ValueError,TypeError,KeyError):self.answer(400,{'error':'invalid/stale event'})
             def do_GET(self):self.answer(405,{'error':'POST required'})
         class Server(ThreadingHTTPServer):
             daemon_threads=True
             request_queue_size=8
-        self.server=Server(('127.0.0.1',0),Handler)
+        self.server=Server(('127.0.0.1',self.port),Handler)
         self.thread=threading.Thread(target=self.server.serve_forever,name='MyRecorderBridge',daemon=True);self.thread.start()
     @property
     def pairing(self):return {'port':self.server.server_address[1],'token':self.token}

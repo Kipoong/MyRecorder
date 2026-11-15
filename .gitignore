@@ -52,3 +52,7 @@ browser-test-*/
 player-demo-*/
 playwright-report/
 test-results/
+# Persistent credentials must never be published
+*.dpapi
+.pairing-*
+pairing.json

@@ -14,6 +14,7 @@ from .media import binary
 from .modes import RecordingPolicy, MODES
 from .preferences import PreferencesStore
 from .browser_bridge import Bridge
+from .pairing_store import PairingStore
 from .auto_link import AutoLink
 from .desktop import layout as desktop_layout, validate_rect
 from .desktop_ui import DesktopDialog, DesktopOverlay
@@ -130,7 +131,7 @@ class StorageDialog(QDialog):
 class Window(QMainWindow):
     def __init__(self, store=None, check_startup=True):
         super().__init__()
-        self.setWindowTitle('MyRecorder V0.6.0 — Windows 11')
+        self.setWindowTitle('MyRecorder V0.6.1 — Windows 11')
         self.settings = store or SettingsStore()
         self.paths = self.settings.load()
         self.preferences=PreferencesStore(self.settings.root)
@@ -138,6 +139,7 @@ class Window(QMainWindow):
         self.desktop_mode=False
         self.desktop_entries=[]
         self.desktop_signature=None
+        self.pairing_store=None
         self.browser_bridge=None
         self.auto_link=None
         self.auto_log=None
@@ -188,6 +190,7 @@ class Window(QMainWindow):
         self.mode_hint=QLabel(self.policy.instructions);self.mode_hint.setWordWrap(True)
         self.extension_id=QLineEdit();self.extension_id.setPlaceholderText('확장 프로그램 ID (a~p 32자)')
         self.bridge_button=QPushButton('로컬 연결 시작');self.bridge_button.clicked.connect(self.open_browser_bridge)
+        self.reset_pairing=QPushButton('연결 초기화');self.reset_pairing.clicked.connect(self.reset_browser_pairing)
         self.pairing_info=QLineEdit();self.pairing_info.setReadOnly(True);self.pairing_info.setPlaceholderText('연결 정보를 확장 팝업에 붙여넣으세요. 토큰은 공유하지 마세요.')
         self.lecture_tab=QComboBox();self.lecture_tab.addItem('연결된 HTML5 강의 탭 대기',None)
         self.auto_detect=QCheckBox('강의 재생 자동 감지');self.auto_detect.toggled.connect(self.toggle_auto_detect)
@@ -275,7 +278,7 @@ class Window(QMainWindow):
         self.status = QLabel('대기 — 제목과 녹화 영역을 확인하세요.')
         self.status.setWordWrap(True)
         rows = [(QLabel('녹화 유형'),self.recording_type), (self.mode_hint,),
-                (self.extension_id,self.bridge_button),(self.pairing_info,),
+                (self.extension_id,self.bridge_button,self.reset_pairing),(self.pairing_info,),
                 (self.auto_detect,self.lecture_tab,self.auto_ended),(self.auto_lead,self.auto_tail),(self.auto_status,), (QLabel('강의 제목'), self.title, self.title_button),
                 (self.title_mode, self.lecture_window, self.window_refresh),
                 (self.ocr_pick, self.ocr_language, self.ocr_engine), (self.title_hint,), (QLabel('저장 경로'), self.folder, self.browse),
@@ -303,6 +306,7 @@ class Window(QMainWindow):
             QTimer.singleShot(0, self.startup_checks)
 
     def startup_checks(self):
+        self.restore_browser_pairing()
         if self.check_storage() and os.name == 'nt':
             self.refresh_audio_devices()
 
@@ -442,7 +446,10 @@ class Window(QMainWindow):
     def open_browser_bridge(self):
         if self.browser_bridge or self.state!='idle' or self.job:return
         try:
-            self.browser_bridge=Bridge(self.extension_id.text().strip());self.browser_bridge.start()
+            self.browser_bridge=Bridge(self.extension_id.text().strip(),signed_only=os.name=='nt');self.browser_bridge.start()
+            if os.name=='nt':
+                self.pairing_store=self.pairing_store or PairingStore()
+                self.pairing_store.save(self.extension_id.text().strip(),self.browser_bridge.pairing)
             import json
             self.pairing_info.setText(json.dumps(self.browser_bridge.pairing))
             self.extension_id.setEnabled(False);self.bridge_button.setEnabled(False)
@@ -450,6 +457,36 @@ class Window(QMainWindow):
         except Exception as exc:
             if self.browser_bridge:self.browser_bridge.close()
             self.browser_bridge=None;QMessageBox.warning(self,'브라우저 연결',str(exc))
+
+    def restore_browser_pairing(self):
+        if self.browser_bridge or os.name!='nt':return
+        candidate=None
+        try:
+            self.pairing_store=self.pairing_store or PairingStore()
+            data=self.pairing_store.load()
+            if not data:return
+            candidate=Bridge(data['extension_id'],token=data['token'],port=data['port'],signed_only=True);candidate.start()
+            self.browser_bridge=candidate;self.extension_id.setText(data['extension_id'])
+            self.extension_id.setEnabled(False);self.bridge_button.setEnabled(False)
+            self.pairing_info.clear();self.pairing_info.setPlaceholderText('저장한 연결 자동 복원 — 인증 정보 숨김')
+            self.auto_status.setText('저장한 브라우저 연결 복원 완료 — 녹화는 시작하지 않습니다. 강의 탭을 확인하세요.')
+        except Exception:
+            if candidate:candidate.close()
+            self.auto_status.setText('연결 자동 복원 실패 — 다른 앱의 포트 사용/Windows 계정을 확인하거나 연결 초기화 후 다시 페어링하세요. 수동 녹화는 가능합니다.')
+
+    def reset_browser_pairing(self):
+        if self.state!='idle' or self.job or (self.auto_link and self.auto_link.enabled):return
+        answer=QMessageBox.question(self,'저장한 연결 초기화','저장한 인증 정보를 폐기할까요? 확장 팝업에서도 연결 정보를 삭제한 뒤 새로 페어링하세요.',QMessageBox.Yes|QMessageBox.No,QMessageBox.No)
+        if answer!=QMessageBox.Yes:return
+        try:
+            if self.pairing_store:self.pairing_store.reset()
+            elif os.name=='nt':PairingStore().reset()
+            if self.browser_bridge:self.browser_bridge.close()
+            self.browser_bridge=None;self.auto_link=None;self._browser_keys=[]
+            self.lecture_tab.clear();self.lecture_tab.addItem('연결된 HTML5 강의 탭 대기',None)
+            self.pairing_info.clear();self.extension_id.setEnabled(True);self.bridge_button.setEnabled(True)
+            self.auto_detect.setChecked(False);self.auto_status.setText('인증 정보 폐기 완료 — 새로 페어링하세요.')
+        except Exception:QMessageBox.warning(self,'연결 초기화 실패','인증 정보 파일을 삭제하지 못했습니다. Windows 파일 권한을 확인하세요.')
 
     def auto_event(self,event,**fields):
         if self.auto_log:self.auto_log.write(event,**fields)
@@ -473,6 +510,7 @@ class Window(QMainWindow):
 
     def browser_tick(self):
         armed=bool(self.auto_link and self.auto_link.enabled)
+        self.reset_pairing.setEnabled(self.state=='idle' and not self.job and not armed)
         self.auto_detect.setEnabled(self.policy.mode=='lecture' and (armed or (self.state=='idle' and not self.job)))
         for control in (self.lecture_tab,self.auto_lead,self.auto_tail,self.auto_ended):control.setEnabled(not armed and self.state=='idle' and not self.job)
         if not self.browser_bridge:return
@@ -492,7 +530,7 @@ class Window(QMainWindow):
                 self.lecture_tab.setItemText(i,source['title']+' | '+source['video_label']+' | '+source['origin']+' | '+freshness)
         if not self.auto_link:
             self.browser_bridge.drain()
-            if sources:self.auto_status.setText('탭 감지됨 — 정확한 video를 선택하고 자동 감지를 켜세요.')
+            if sources:self.auto_status.setText('브라우저 자동 연결됨 — 녹화는 대기 중입니다. video 선택 후 자동 감지를 켜세요.')
             return
         busy=self.job is not None or self.capture_pending or self.picker_pending or self._recording_transition
         action=self.auto_link.tick(self.state,busy,self.policy.mode)

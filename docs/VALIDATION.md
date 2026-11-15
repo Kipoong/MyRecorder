@@ -65,3 +65,10 @@ Linux unittest 143개 및 기존/신규 Qt smoke 통과. 실제 Chromium 압축�
 HTTP에서 5회 ready 게이트/정지·다른 탭·버퍼링·관찰 우회·끊김 검사를 수행했습니다.
 Qt/브라우저 녹화 엔진은 모의이며 Windows 자동 캡처·오디오·싱크 통과가 아닙니다.
 [시험 범위·한계와 Windows 절차](AUTO_LINK_V0.6.md).
+
+## V0.6.1
+
+Linux unittest 153개 및 기존/신규 Qt smoke. 실제 Chromium 암호화 저장/앱 서버·브라우저 프로필
+재시작/사이트 감지 복원/서명 통신/삭제를 검사했습니다. Windows DPAPI는 모의 객체로만 검사했으며
+실제 Windows 계정 암호화·재부팅·Chrome/Edge 및 녹화 회귀는 미검증입니다.
+[상세 범위와 Windows 재검증](RECONNECT_V0.6.1.md).
