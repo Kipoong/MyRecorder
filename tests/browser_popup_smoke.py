@@ -34,7 +34,10 @@ with tempfile.TemporaryDirectory(prefix='popup-flow-example-') as d:
                 assert popup.locator('#target').input_value()=='' # own popup tab is not a lecture
                 target_id=worker.evaluate('async()=>{const tabs=await chrome.tabs.query({});return tabs.find(t=>t.title==="Example HTML5 target").id}')
                 popup.select_option('#target',str(target_id))
-                popup.fill('#pairing',json.dumps(bridge.pairing));popup.click('#connect')
+                popup.fill('#pairing',json.dumps(bridge.pairing));popup.click('#save-pairing')
+                wait(lambda:'앱 응답 정상' in popup.locator('#credential-status').inner_text())
+                assert bridge.snapshot()==[] and bridge.drain()==[]
+                popup.click('#connect')
                 wait(lambda:'연결 저장 완료' in popup.locator('#status').inner_text())
                 wait(lambda:len(bridge.snapshot())>0)
                 assert popup.locator('#pairing').input_value()==''

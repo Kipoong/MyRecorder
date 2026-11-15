@@ -131,7 +131,7 @@ class StorageDialog(QDialog):
 class Window(QMainWindow):
     def __init__(self, store=None, check_startup=True):
         super().__init__()
-        self.setWindowTitle('MyRecorder V0.6.2 — Windows 11')
+        self.setWindowTitle('MyRecorder V0.6.3 — Windows 11')
         self.settings = store or SettingsStore()
         self.paths = self.settings.load()
         self.preferences=PreferencesStore(self.settings.root)
@@ -191,6 +191,7 @@ class Window(QMainWindow):
         self.extension_id=QLineEdit();self.extension_id.setPlaceholderText('확장 프로그램 ID (a~p 32자)')
         self.bridge_button=QPushButton('로컬 연결 시작');self.bridge_button.clicked.connect(self.open_browser_bridge)
         self.reset_pairing=QPushButton('연결 초기화');self.reset_pairing.clicked.connect(self.reset_browser_pairing)
+        self.copy_pairing=QPushButton('연결 JSON 복사');self.copy_pairing.clicked.connect(self.copy_browser_pairing)
         self.pairing_info=QLineEdit();self.pairing_info.setReadOnly(True);self.pairing_info.setPlaceholderText('연결 정보를 확장 팝업에 붙여넣으세요. 토큰은 공유하지 마세요.')
         self.lecture_tab=QComboBox();self.lecture_tab.addItem('연결된 HTML5 강의 탭 대기',None)
         self.auto_detect=QCheckBox('강의 재생 자동 감지');self.auto_detect.toggled.connect(self.toggle_auto_detect)
@@ -278,7 +279,7 @@ class Window(QMainWindow):
         self.status = QLabel('대기 — 제목과 녹화 영역을 확인하세요.')
         self.status.setWordWrap(True)
         rows = [(QLabel('녹화 유형'),self.recording_type), (self.mode_hint,),
-                (self.extension_id,self.bridge_button,self.reset_pairing),(self.pairing_info,),
+                (self.extension_id,self.bridge_button,self.reset_pairing),(self.pairing_info,self.copy_pairing),
                 (self.auto_detect,self.lecture_tab,self.auto_ended),(self.auto_lead,self.auto_tail),(self.auto_status,), (QLabel('강의 제목'), self.title, self.title_button),
                 (self.title_mode, self.lecture_window, self.window_refresh),
                 (self.ocr_pick, self.ocr_language, self.ocr_engine), (self.title_hint,), (QLabel('저장 경로'), self.folder, self.browse),
@@ -488,6 +489,13 @@ class Window(QMainWindow):
             self.auto_detect.setChecked(False);self.auto_status.setText('인증 정보 폐기 완료 — 새로 페어링하세요.')
         except Exception:QMessageBox.warning(self,'연결 초기화 실패','인증 정보 파일을 삭제하지 못했습니다. Windows 파일 권한을 확인하세요.')
 
+    def copy_browser_pairing(self):
+        if not self.browser_bridge:
+            QMessageBox.information(self,'연결 정보','로컬 연결을 먼저 시작하세요.');return
+        import json
+        QApplication.clipboard().setText(json.dumps(self.browser_bridge.pairing))
+        self.auto_status.setText('현재 연결 JSON을 복사했습니다. 확장에 붙여넣고 ① 앱 연결 저장·확인을 누르세요. 토큰은 공유하지 마세요.')
+
     def auto_event(self,event,**fields):
         if self.auto_log:self.auto_log.write(event,**fields)
 
@@ -509,6 +517,7 @@ class Window(QMainWindow):
             QMessageBox.warning(self,'자동 연동 준비',str(exc))
 
     def browser_tick(self):
+        self.copy_pairing.setEnabled(self.browser_bridge is not None)
         armed=bool(self.auto_link and self.auto_link.enabled)
         self.reset_pairing.setEnabled(self.state=='idle' and not self.job and not armed)
         self.auto_detect.setEnabled(self.policy.mode=='lecture' and (armed or (self.state=='idle' and not self.job)))

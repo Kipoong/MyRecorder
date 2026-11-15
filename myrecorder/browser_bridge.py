@@ -21,6 +21,9 @@ class Bridge:
         self.sources=OrderedDict();self.replies=OrderedDict();self.last_sequences={}
         self.selected=None;self.armed=False;self.message='수동 제어';self.server=None;self.thread=None
     def ingest(self,data):
+        # Authenticated side-effect-free probe; never emits a player event or arms capture.
+        if isinstance(data,dict) and data.get('kind')=='ping':
+            return {'connection':'ready','protocol':1}
         if not isinstance(data,dict) or data.get('kind') not in KINDS:raise ValueError('invalid event')
         source=data.get('source');seq=data.get('seq')
         if not isinstance(source,dict) or not isinstance(seq,int) or isinstance(seq,bool) or seq<0:raise ValueError('invalid source/sequence')

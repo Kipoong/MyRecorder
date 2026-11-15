@@ -65,5 +65,5 @@
   // Serialize reads/writes so a delayed decrypt cannot resurrect credentials after forget.
   let operations=Promise.resolve();
   function serial(action) {const next=operations.catch(()=>{}).then(action);operations=next.catch(()=>{});return next;}
-  globalThis.PairingVault={save:value=>serial(()=>save(value)),load:()=>serial(load),forget:()=>serial(forget),key:create=>serial(()=>key(create))};
+  globalThis.PairingVault={save:value=>serial(()=>save(value)),verify:()=>serial(async()=>{cached=undefined;return !!await load();}),load:()=>serial(load),forget:()=>serial(forget),key:create=>serial(()=>key(create))};
 })();

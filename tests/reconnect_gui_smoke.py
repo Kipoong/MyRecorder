@@ -24,6 +24,11 @@ with tempfile.TemporaryDirectory(prefix='reconnect-gui-') as d:
         assert second.state=='idle' and second.recorder is None and second.auto_link is None
         assert not second.auto_detect.isChecked() and not second.browser_bridge.armed
         assert second.pairing_info.text()==''
+        import json
+        clipboard=Mock()
+        with patch('myrecorder.gui.QApplication.clipboard',return_value=clipboard):second.copy_browser_pairing()
+        assert json.loads(clipboard.setText.call_args.args[0])==pairing
+        assert second.pairing_info.text()==''
         engine.assert_not_called()
         with patch('myrecorder.gui.QMessageBox.question',return_value=QMessageBox.Yes):second.reset_browser_pairing()
         assert not store.path.exists() and second.browser_bridge is None

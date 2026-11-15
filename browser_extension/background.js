@@ -26,31 +26,46 @@ chrome.runtime.onInstalled.addListener(()=>restoreQueued().catch(()=>{}));
 let queue = Promise.resolve();
 let seq = 0;
 const instance = crypto.randomUUID();
+function connectionError(code,message){const e=new Error(message);e.code=code;return e;}
 async function post(payload) {
   const pairing = await PairingVault.load();
-  if (!pairing) throw new Error('확장 팝업에서 로컬 연결 정보를 입력하세요.');
+  if (!pairing) throw connectionError('CREDENTIALS_MISSING','확장에 저장된 인증 정보가 없습니다. ① 앱 연결 저장·확인을 누르세요.');
   const body=JSON.stringify({...payload,seq:++seq});
   const nonce=[...crypto.getRandomValues(new Uint8Array(32))].map(v=>v.toString(16).padStart(2,'0')).join('');
   const stamp=String(Date.now()),encode=value=>new TextEncoder().encode(value);
   const key=await crypto.subtle.importKey('raw',encode(pairing.token),{name:'HMAC',hash:'SHA-256'},false,['sign','verify']);
   const signature=await crypto.subtle.sign('HMAC',key,encode(`POST\n/v1/events\n${stamp}\n${nonce}\n${body}`));
   const hex=bytes=>[...new Uint8Array(bytes)].map(v=>v.toString(16).padStart(2,'0')).join('');
-  const response = await fetch(`http://127.0.0.1:${pairing.port}/v1/events`, {
+  let response;
+  try {response = await fetch(`http://127.0.0.1:${pairing.port}/v1/events`, {
     method:'POST',cache:'no-store',signal:AbortSignal.timeout(4000),
     headers:{'Content-Type':'application/json','Authorization':`MyRecorder-HMAC ${hex(signature)}`,
       'X-MyRecorder-Extension':chrome.runtime.id,'X-MyRecorder-Nonce':nonce,'X-MyRecorder-Time':stamp},body
   });
-  if (!response.ok) throw new Error(`로컬 연결 거부 (${response.status}). 앱 연결 초기화 여부를 확인하세요.`);
+  } catch {throw connectionError('APP_UNREACHABLE','앱에 연결하지 못했습니다. MyRecorder 실행 상태와 연결 포트를 확인하세요.');}
+  if (response.status===403) throw connectionError('AUTH_REJECTED','앱이 인증을 거부했습니다. 앱의 확장 ID와 현재 연결 JSON이 일치하는지 확인하세요.');
+  if (response.status===400 && payload.kind==='ping') throw connectionError('APP_UPDATE_REQUIRED','MyRecorder 앱도 V0.6.3으로 업데이트한 뒤 실행하세요.');
+  if (!response.ok) throw connectionError('APP_HTTP_ERROR',`앱 응답 오류 (${response.status})`);
   const text=await response.text(),proof=response.headers.get('X-MyRecorder-Proof');
-  if (!/^[a-f0-9]{64}$/.test(proof||'')) throw new Error('MyRecorder 응답 인증 실패');
+  if (!/^[a-f0-9]{64}$/.test(proof||'')) throw connectionError('APP_PROOF_INVALID','앱 응답 서명을 확인하지 못했습니다. 연결 포트를 확인하세요.');
   const bytes=new Uint8Array(proof.match(/../g).map(v=>parseInt(v,16)));
-  if (!await crypto.subtle.verify('HMAC',key,bytes,encode(`response\n${nonce}\n${text}`))) throw new Error('MyRecorder 응답 인증 실패');
+  if (!await crypto.subtle.verify('HMAC',key,bytes,encode(`response\n${nonce}\n${text}`))) throw connectionError('APP_PROOF_INVALID','앱 응답 서명을 확인하지 못했습니다. 연결 포트를 확인하세요.');
   return JSON.parse(text);
 }
 chrome.runtime.onMessage.addListener((message, sender, respond) => {
-  if (sender.id===chrome.runtime.id && sender.url===chrome.runtime.getURL('popup.html') && ['pairing_save','pairing_status','pairing_forget','site_remember'].includes(message?.type)) {
+  if (sender.id===chrome.runtime.id && sender.url===chrome.runtime.getURL('popup.html') && ['pairing_save','pairing_status','pairing_verify','pairing_forget','site_remember'].includes(message?.type)) {
     (async()=>{
-      if (message.type==='pairing_save') await PairingVault.save(message.pairing);
+      if (message.type==='pairing_save') {
+        try {await PairingVault.save(message.pairing);if (!await PairingVault.verify()) throw new Error('missing readback');}
+        catch {throw connectionError('STORE_WRITE_FAILED','브라우저 암호화 저장/다시 읽기 확인에 실패했습니다. 저장소 권한이나 프로필을 확인하세요.');}
+      }
+      if (message.type==='pairing_verify') {
+        const pairing=await PairingVault.load();
+        if (!pairing) throw connectionError('CREDENTIALS_MISSING','저장된 인증 정보가 없습니다. ① 앱 연결 저장·확인을 누르세요.');
+        const reply=await post({kind:'ping'});
+        if (reply.connection!=='ready') throw connectionError('APP_PROTOCOL','앱 연결 확인 응답이 올바르지 않습니다.');
+        return {ok:true,paired:true,verified:true,port:pairing.port};
+      }
       if (message.type==='pairing_forget') {await PairingVault.forget();await chrome.storage.local.remove('paired_sites');}
       if (message.type==='site_remember') {
         if (!/^https?:\/\/[^/ *]+\/\*$/.test(message.pattern)||!/^[a-f0-9]{16}$/.test(message.id)) throw new Error('invalid site');
@@ -59,8 +74,9 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
         if (sites.length>=32) throw new Error('too many sites');
         sites.push({pattern:message.pattern,id:message.id});await chrome.storage.local.set({paired_sites:sites});await restoreQueued();
       }
-      return {ok:true,paired:!!await PairingVault.load()};
-    })().then(respond).catch(()=>respond({ok:false,error:'저장한 연결 복원/변경 실패. 연결 정보를 삭제하고 다시 페어링하세요.'}));
+      const stored=await PairingVault.load();
+      return {ok:true,paired:!!stored,port:stored?.port};
+    })().then(respond).catch(error=>respond({ok:false,code:error.code||'STORE_READ_FAILED',error:error.code?error.message:'저장한 인증 정보 읽기에 실패했습니다. 브라우저 프로필을 확인하세요.'}));
     return true;
   }
   if (message?.type !== 'lecture_event' || sender.id !== chrome.runtime.id || !sender.tab || sender.frameId !== 0) return;

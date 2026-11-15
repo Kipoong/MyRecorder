@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "MyRecorder 강의 연동",
-  "version": "0.6.2",
+  "version": "0.6.3",
   "description": "선택한 HTML5 강의 플레이어를 로컬 MyRecorder와 연동합니다.",
   "permissions": [
     "activeTab",

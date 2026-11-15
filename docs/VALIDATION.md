@@ -79,3 +79,10 @@ Linux unittest 153개 및 기존/신규 Qt smoke. 실제 Chromium 암호화 저�
 기존 Qt/브라우저 회귀 검사, 신규 실제 팝업 설정 경로 검사를 통과했습니다.
 Windows Chrome/Edge 권한·연결·실제 캡처는 미검증입니다.
 [원인과 적용 절차](POPUP_FIX_V0.6.2.md).
+
+## V0.6.3
+
+Linux unittest 165개와 기존 Qt/브라우저 회귀 검사, 실제 팝업의 저장·다시 읽기·서명 ping·
+다시 열기/파일 입력/앱 중지·재시작 검사를 수행했습니다. 저장 실패는 모의 주입했습니다.
+사용자 Windows 저장 문제의 원인은 아직 확정하지 않았으며 새 단계별 코드로 구별합니다.
+Windows DPAPI 및 실제 캡처는 미검증입니다. [절차](PAIRING_STEPS_V0.6.3.md).
